@@ -1,0 +1,98 @@
+todo:
+  Don't die on repeated influxdb errors?
+  Consider tagging influxdb writes with operation type (pack, update)
+  Don't log object writes for update queue: they won't happen
+
+done:
+  Don't close globpack as soon as a gitpack is done.
+  Rotate globpacks on the hour
+  Delete packs from (queue|disk) when done
+  Double-check what happens on external reference error
+  Don't unconditionally delete refpacks when closing them
+
+Update procedure:
+  * Queue a repository update
+  * Claim the repo update
+  * Get last known refs
+  * Get new refs
+  * Calculate difference, store delta (but don't update last known refs!)
+  * Download new commits
+    * If failing with an empty response, retry up to twice, then queue a new
+      update.
+    * If failing with a hash error, log an error, don't queue a new update.
+    * If it succeeds:
+      * Queue reading the pack.
+      * Update last known refs
+  * Delete update from queue
+
+Multistep pack reading:
+  Read whole pack:
+    For non-delta objects:
+      Store location in baseObjects[]
+    For delta objects:
+      Store location in descendedFrom[basehash][]
+  For each loc := range baseObjects:
+    Read object at loc
+    Write object
+    DFS search descendedFrom:
+      if obj.hash in descendedFrom, for loc := range descendedFrom[obj.hash]:
+        Read object at loc
+        Apply delta
+        Write object
+        DFS search descendedFrom.
+  For each basehash, objs := descendedFrom:
+    Lookup basehash in existing globpacks:
+      If present:
+        Read object at loc
+        Read base object
+        Apply delta
+        DFS search descendedFrom
+      If not present:
+        Next iteration
+  If len(descendedFrom) > 0, queue a full update of the repository, and exit
+
+Hypothetical Index (doesn't exist, may not ever):
+  bytes | description
+  0-7   | Static header "gidx\x00\x0d\x0a\xa5"
+  8-11  | Version number "\x00\x00\x00\x09"
+  12    | Number of bytes in offset
+  
+  Records:
+  20 bytes | Object ID
+  N bytes  | Offset in packfile
+
+objects table:
+  id: bin? base64? hex? object ID
+  file: globpack name
+  loc: offset
+
+refs_latest:
+  id: .git URL (includes scheme)
+  refs: {refname: object ID}
+
+refs_history:
+  id: .git URL (includes scheme)
+  history: [
+    {
+      time: timestamp
+      refs: {
+        refname: null | object ID
+      }
+    }, ...
+  ]
+
+queued_updates:
+  id: string (repo path)
+  in_progress: bool
+  queue_time: time
+  start_time: time
+  oldest_to_grab: time
+  force_full: bool
+
+queued_packs:
+  id: autogen
+  in_progress: bool
+  queue_time: time
+  start_time: time
+  repo_path: string
+  filename: string

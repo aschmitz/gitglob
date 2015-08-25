@@ -1,0 +1,166 @@
+= Glob Pack File Format =
+
+== Rationale ==
+
+Because gitglob is intended to store commits from many different repositories,
+many of which may be forks (or even simple clones) of other repositories, any
+per-repository pack file is likely to cause significant duplication of stored
+data. Any two repositories which share significant amounts of data would result
+in two copies of the shared data. This becomes significant when considering,
+say, clones of the Linux kernel or other popular projects: many people have
+forks of these projects with relatively few changes, but the repositories
+themselves are reasonably large.
+
+Because of this, it is appropriate to use a merged packfile format. This does
+not immediately disqualify Git's packfile format, but there are additional
+concerns in that case. Git's packfile format is optimized for normal Git usage,
+but gitglob is not standard Git usage. For example, Git optimizes for access to
+recent full checkouts, while gitglob is not expected to have such concerns.
+Similarly, Git expects packfiles to be rebuilt on a regular basis, while gitglob
+would benefit from a file format which doesn't change once it is written. (This
+would support efficient backups, backups on cold storage, and so on.) Other
+concerns may exist with the Git packfile format for gitglob's usage, but these
+are sufficient to consider a slightly different format.
+
+== Format ==
+
+The glob pack file (globpack) is composed of a header followed by zero or more
+objects. There is no explicit limit set on the size of globpacks, but it is
+considered a flaw if any part of the specification limits the globpack to any
+size below 1 TiB.
+
+For practicality purposes, it may be desirable for applications to limit their
+globpack size to a manageable size. For example, a 1 TiB globpack significantly
+limits the number of media available to back up the globpack. Because globpacks
+are not intended to individually contain all objects in any given repository,
+any application will need to handle multiple globpacks gracefully: splitting a
+file at a lower size adds little overhead while allowing more reasonable
+backups and checksum verification.
+
+Because the globpack itself does not contain an index of its contents, a
+separate index file or data structure may be maintained alongside the globpack.
+While specifying such an index format in the future may be useful, none is
+documented here.
+
+Note that while it is technically possible for globpacks to be rewritten at a
+later date - for example, by a process which calculates more optimal diffs - it
+is not generally expected that they will be. Some applications may in fact
+require the globpacks to be considered immutable once finished: archival
+processes may require "finished" data to not be modified. Applications reading
+globpacks should avoid modifying them unnecessarily.
+
+Data within a globpack is intentionally not compressed. While Git packfiles
+compress each object to allow quick seeking, globfiles are intended more for
+archival purposes, and are expected to be compressed using a separate program
+where appropriate. (For example, by using bzip2 or xz on a globpack.)
+
+=== Header ===
+
+Each globpack must begin with the string "gpak\x00\x0d\x0a\xa5". The next four
+bytes should contain the globpack version in network byte order: in this case,
+"\x00\x00\x00\x01". The next eight bytes store the length of the file in network
+byte order, and the following 32 bytes are reserved for a checksum. That is:
+
+bytes | description
+0-7   | Static header "gpak\x00\x0d\x0a\xa5"
+8-11  | Version number "\x00\x00\x00\x01"
+12-19 | File length, network byte order
+20-51 | Checksum
+
+The checksum field should contain a SHA-256 hash of the file data, including the
+header and all objects. In calculating the hash, the file length should be
+assumed to be 2^64-1, and the checksum field used in calculating the checksum
+should contain all "\x00" bytes.
+
+Note that the file length and checksum must be written after the rest of the
+globpack has been finished: this requires a seekable writing format. Prior to
+the file being finished, globpack writers MUST use 2^64-1 as a file length. Any
+program reading a globpack with a length of 2^64-1 SHOULD treat such a size as
+an error. Such programs may offer an option to "fix" such globfiles, but those
+fixes should generally be accompanied by a warning that those fixes may cover up
+data loss.
+
+=== Object ===
+
+Objects are stored in a fashion which is reminiscent of Git's object storage,
+with some differences. To allow identifying objects without walking all
+globpacks to identify roots for delta objects, the object ID of each object is
+stored with the object. Addiionally, no OFS_DELTA objects are allowed. Notably,
+REF_DELTA objects are allowed. Finally, objects are not compressed individually.
+
+The globpack format for non-delta objects is as follows:
+bytes      | description
+0-19       | Commit hash
+20         | Object type
+21-(20+N)  | Uvarint object stored data length
+(21+N)-end | Stored object data
+
+The globpack format for delta objects is as follows:
+bytes      | description
+0-19       | Commit hash
+20         | Object type
+21-40      | Base object hash
+41-(20+N)  | Uvarint object stored data length
+(21+N)-end | Stored object delta
+
+Note that the varint used for storing data length is the "standard" varint
+format: the most-significant bit of each byte signifies a continuation byte, and
+the remaining 7 bits in the byte contain data for the integer, least-significant
+data first.
+
+The object type value should be treated as follows:
+bit | description
+0-2 | Git object type of the base object. (That is, not the delta type.)
+3   | Delta flag: If set, this object's data is a delta.
+4   | Compressed flag: If set, this object is compressed using LZMA.
+5-7 | Reserved: must be set to 0.
+
+Objects which have the delta flag set have their object type followed
+immediately by a 20-byte hash of the object to which their delta data should be
+applied. Their data is the delta between that object and this object, in Git's
+delta format.
+
+Objects which have the compressed flag set have their object data compressed
+using LZMA. The "object stored data length" is the compressed size of the data,
+not the decomprssed size.
+
+Again, unlike Git, the stored object data in a globpack is not compressed as
+part of the globpack format. This allows the possibility of more efficient
+compression of the entire file, not simply individual objects.
+
+=== Ordering ===
+
+While Git commits are generally considered to be "ordered" - that is, a new
+commit depends on a previous commit - object deltas are not necessarily ordered:
+a delta may be calculated for one object based on what is technically a "newer"
+file. This fact is maintained in globpack files: deltas can be calculated from a
+"newer" object to an "older" object.
+
+However, when creating globpack files, it may be appropriate to store objects in
+an order that ensures their contents will be useful in the future. For example,
+storing the base of a delta before the delta itself, or storing the objects
+referred to by a tree entry before the tree entry. This is an implementation
+recommendation which will ensure that even a truncated file will be useful.
+
+== Use in Gitglob ==
+
+Gitglob uses globpacks to store git commit data. Gitglob has a few more
+requirements for globpack files, but these fall outside the scope of a globpack
+definition. Some of these requirements are stated below:
+
+* Globpack files must be given unique names. In general, this will follow the
+  format "gitglob_YYYYMMDDhhiiss_NNNNNN.globpack", where YYYY indicates the year
+  in four digits, MM indicates the month, DD indicates the day, hh indicates the
+  hour, ii indicates the minutes, and ss indicates the seconds. NNNNNN is any
+  set of six characters that will make the globpack filename unique. (For
+  example, if multiple computers are creating gitglob globpacks, each computer
+  should use a different NNNNNN. The same is true for multiple processes on the
+  same computer, or any situation in which two globpacks may be created during
+  the same second.)
+
+* Globpack filenames including times should use either UTC for their time
+  source, no other time zone. UTC is allowed for simplicity, but this means that
+  it may be possible for multiple globpacks to be written with the same
+  timestamp, even if they were actually written one second after another (due to
+  leap seconds' effect on UTC).
+

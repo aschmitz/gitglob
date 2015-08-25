@@ -1,0 +1,148 @@
+Github provides an events API which includes all pushed SHA1s. This
+largely eliminates the need to download a full info/refs file, as any updates
+will be streamed. However, because the events API is not guaranteed to contain
+all items (largely due to fetching issues: it's not a resumable stream or
+anything of the sort), periodic info/refs checks will be necessary.
+
+== References ==
+
+An intelligent method of grabbing refs for the most frequently updated projects
+would be nice, but it would also be sufficient to check all projects on a
+regular basis in the interim.
+
+The info/refs requests can be performed as follows:
+* Connect to the repository for a given project
+* List all refs (potentially storing an updated capabilities line)
+* Store the list of refs (or deltas from the last set)
+* Queue for download any new refs which haven't been seen before
+
+This is a reasonably short process that doesn't involve downloading or storing
+any commits.
+
+== Commits and Objects ==
+
+Commits and objects can be requested via smart-http. We should batch all
+requests for the same repository at once, although this is likely to provide
+benefits only during initial clones or if the events API has skipped large
+numbers of commits.
+
+Returning the "have" list of objects to Github doesn't need to follow some of
+the standard Git algorithm, because the local database will not have any commits
+that never existed on Github. Forced pushes are the only pushes that could cause
+the local copy to be ahead of the reference copy. Because of this, the reporting
+mechanism will report existing commits in the following order:
+
+Call the set of all current refs R, and the set of ref that need to be updated
+S. For all refs r in R that we have and are newer than (or as old as) the oldest
+item in S, send these refs in newest-first order. After this, send prior commits
+for each branch in the latest version of S, until reaching 256 commits sent.
+After this point, simply send "done", and deal with the (potentially) extra
+data.
+
+= Processes =
+
+The following procedures need to be done on a regular basis:
+
+* Identify new commits from GitHub.
+  * Process event stream for new pushes, add new commit hashes to the list of
+    commits to download, and add the repository to the list of repositories to
+    scan.
+  * Process event stream for newly public repositories, add these to the list of
+    repositories to scan.
+  * Periodically re-scan existing repositories.
+* Scan repositories for references.
+  * Store new references in the list of commits to download.
+* Download new commits.
+  * Request all commits which are known to have existed for the repository, but
+    have not been downloaded.
+  * A packfile will be returned as a result. This packfile should be stored for
+    use in proceeding steps, although it does not need to be stored
+    indefinitely.
+  * Any commits which were requested should be moved to a list of "potentially
+    downloaded" commits.
+* Create globpacks.
+  * This consumes the packfiles created earlier.
+  * New objects should be stored in globpacks. Any new objects should be stored
+    in a database along with a pointer to their location in a globpack, allowing
+    later retrieval.
+  * Any commits stored should be removed from the list of commits to download.
+* Clean up.
+  * This includes moving stale items from the "potentially downloaded" category
+    back to the list of commits to download.
+  * Additional processes, such as removing consumed packfiles, may be necessary
+    as well.
+
+These have been grouped into separate processes, all of which can be performed
+concurrently:
+
+* `gitglob-github-stream`: Identifies new commits from the GitHub event stream.
+* `gitglob-repo-poll`: Schedules repository checks periodically to identify new
+  commits from repositories.
+* `gitglob-download`: Downloads reflists and commits from repositories.
+* `gitglob-createglob`: Takes downloaded packfiles and adds them to the gitglob
+  data store.
+* `gitglob-cleanup`: Perform cleanup activities.
+
+For the ease of exchanging data between the different processes, each process
+will interact with one another in a defined, documented manner. Where possible,
+this exchange will include a set of generated files that can be copied and used
+for the needs of other pipeline steps. (For example, `gitglob-download` needs to
+have a list of known commits from `gitglob-createglob`.)
+
+Note that all produced "lists" will need a timestamp associated with each item.
+
+== `gitglob-github-stream` ==
+
+Consumes:
+* Github Event Stream
+
+Produces:
+* List of repositories to query
+* List of commits to request per repository
+
+Note that in some cases, a repository should be queried without knowing a
+specific commit to request. This may happen when a repository has been recently
+made public, for example.
+
+== `gitglob-repo-poll` ==
+
+Consumes:
+* List of repositories and the last time they were checked
+
+Produces:
+* List of repositories to query
+
+At some point in the future, `gitglob-repo-pull` may consume a set of ref
+changes for each repository, to estimate the frequency with which to poll a
+given repository: repositories with frequent updates should be polled more
+frequently.
+
+== `gitglob-download` ==
+
+Consumes:
+* List of repositories to query
+* List of commits to request per repository
+
+Produces:
+* Reflists per repository
+* Requested commits per repository
+* Resulting packfiles
+
+== `gitglob-createglob` ==
+
+Consumes:
+* `gitglob-download` packfiles
+* Previous globfiles
+* Object location database
+
+Produces:
+* New globfiles
+* Additional object location database entries, including a list of commits
+
+== `gitglob-cleanup` ==
+
+Consumes:
+* ???
+
+Produces:
+* ???
