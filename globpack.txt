@@ -24,8 +24,8 @@ are sufficient to consider a slightly different format.
 
 == Format ==
 
-The glob pack file (globpack) is composed of a header followed by zero or more
-objects. There is no explicit limit set on the size of globpacks, but it is
+The gitglob pack file (globpack) is composed of a header followed by zero or
+more objects. There is no explicit limit set on the size of globpacks, but it is
 considered a flaw if any part of the specification limits the globpack to any
 size below 1 TiB.
 
@@ -49,10 +49,12 @@ require the globpacks to be considered immutable once finished: archival
 processes may require "finished" data to not be modified. Applications reading
 globpacks should avoid modifying them unnecessarily.
 
-Data within a globpack is intentionally not compressed. While Git packfiles
-compress each object to allow quick seeking, globfiles are intended more for
-archival purposes, and are expected to be compressed using a separate program
-where appropriate. (For example, by using bzip2 or xz on a globpack.)
+Data within a globpack can be compressed. While Git packfiles compress each
+object to allow quick seeking, globfiles are intended more for archival
+purposes, and may be compressed using a separate program where appropriate. (For
+example, by using bzip2 or xz on a globpack.) For example, an archival process
+for storing globpack files may decompress each object, then recompress the file
+with a more powerful compression algorithm.
 
 === Header ===
 
@@ -85,8 +87,10 @@ data loss.
 Objects are stored in a fashion which is reminiscent of Git's object storage,
 with some differences. To allow identifying objects without walking all
 globpacks to identify roots for delta objects, the object ID of each object is
-stored with the object. Addiionally, no OFS_DELTA objects are allowed. Notably,
-REF_DELTA objects are allowed. Finally, objects are not compressed individually.
+stored with the object. Addiionally, no OFS_DELTA (delta from an object with a
+given offset in a pack) objects are allowed. Notably, REF_DELTA (delta from an
+object with a given hash) objects are allowed. Finally, objects may or may not
+be compressed individually.
 
 The globpack format for non-delta objects is as follows:
 bytes      | description
@@ -112,7 +116,7 @@ The object type value should be treated as follows:
 bit | description
 0-2 | Git object type of the base object. (That is, not the delta type.)
 3   | Delta flag: If set, this object's data is a delta.
-4   | Compressed flag: If set, this object is compressed using LZMA.
+4   | Compressed flag: If set, this object is compressed using DEFLATE.
 5-7 | Reserved: must be set to 0.
 
 Objects which have the delta flag set have their object type followed
@@ -121,12 +125,8 @@ applied. Their data is the delta between that object and this object, in Git's
 delta format.
 
 Objects which have the compressed flag set have their object data compressed
-using LZMA. The "object stored data length" is the compressed size of the data,
-not the decomprssed size.
-
-Again, unlike Git, the stored object data in a globpack is not compressed as
-part of the globpack format. This allows the possibility of more efficient
-compression of the entire file, not simply individual objects.
+using DEFLATE. The "object stored data length" is the compressed size of the
+data, not the decomprssed size.
 
 === Ordering ===
 
@@ -149,18 +149,17 @@ requirements for globpack files, but these fall outside the scope of a globpack
 definition. Some of these requirements are stated below:
 
 * Globpack files must be given unique names. In general, this will follow the
-  format "gitglob_YYYYMMDDhhiiss_NNNNNN.globpack", where YYYY indicates the year
-  in four digits, MM indicates the month, DD indicates the day, hh indicates the
-  hour, ii indicates the minutes, and ss indicates the seconds. NNNNNN is any
-  set of six characters that will make the globpack filename unique. (For
-  example, if multiple computers are creating gitglob globpacks, each computer
-  should use a different NNNNNN. The same is true for multiple processes on the
-  same computer, or any situation in which two globpacks may be created during
-  the same second.)
+  format "gitglob_YYYYMMDDhhiiss_NNN.globpack", where YYYY indicates the year in
+  four digits, MM indicates the month, DD indicates the day, hh indicates the
+  hour, ii indicates the minutes, and ss indicates the seconds. NNN is any set
+  of three characters that will make the globpack filename unique. (For example,
+  if multiple computers are creating gitglob globpacks, each computer should use
+  a different NNN. The same is true for multiple processes on the same computer,
+  or any situation in which two globpacks may be created during the same
+  second.)
 
-* Globpack filenames including times should use either UTC for their time
-  source, no other time zone. UTC is allowed for simplicity, but this means that
-  it may be possible for multiple globpacks to be written with the same
-  timestamp, even if they were actually written one second after another (due to
-  leap seconds' effect on UTC).
-
+* Globpack filenames including times should use UTC for their time source, no
+  other time zone. This means that it may be possible for multiple globpacks to
+  be written with the same timestamp, even if they were actually written one
+  second after another (due to leap seconds' effect on UTC), but the effect of
+  this is expected to be negligible.
