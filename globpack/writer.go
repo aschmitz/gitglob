@@ -470,9 +470,18 @@ func drainWriterBuf(buf []byte, pendingAcks []*globpackWriteRecord) {
   if haveCurrentGlobpack == false {
     panic("no currently open globpack")
   }
-  _, err := currentGlobpack.File.Write(buf)
+  writeLen, err := currentGlobpack.File.Write(buf)
   if err != nil {
     panic(err)
+  }
+  if writeLen != len(buf) {
+    panic(errors.New("unable to write full data to globpack"))
+  }
+  writeLen, err = currentGlobpack.Hash.Write(buf); if err != nil {
+    panic(err)
+  }
+  if writeLen != len(buf) {
+    panic(errors.New("unable to write full data to globpack hash"))
   }
   currentGlobpack.File.Sync()
   writerMutex.Unlock()
