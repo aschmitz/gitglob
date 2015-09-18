@@ -62,7 +62,7 @@ Hypothetical Index (doesn't exist, may not ever):
   N bytes  | Offset in packfile
 
 objects table:
-  id: bin? base64? hex? object ID
+  id: binary
   file: globpack name
   loc: offset
 
