@@ -123,7 +123,7 @@ func influxWritePoint(measurement string, tags map[string]string,
       // Ignore this: we shouldn't have timed out, but it's better to keep going
       // than to die here.
     } else {
-      panic(err.Error())
+      // panic(err.Error())
     }
   }
 }

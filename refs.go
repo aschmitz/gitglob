@@ -184,7 +184,12 @@ func CalcRefDiffs(oldRefs, newRefs map[string][]byte,
     DeletedRefs: make([]string, 0),
   }
   
+  newHashMap := make(map[[hashLen]byte]bool)
+  oldHashMap := make(map[[hashLen]byte]bool)
+  
   for newRef, newHash := range newRefs {
+    newHashMap[sliceToHashArray(newHash)] = true
+    
     // Look up the new ref in the old ref set.
     oldHash, ok := oldRefs[newRef]
     if ok {
@@ -203,10 +208,19 @@ func CalcRefDiffs(oldRefs, newRefs map[string][]byte,
     delete(oldRefs, newRef)
   }
   
-  for oldRef, _ := range oldRefs {
+  for oldRef, oldHash := range oldRefs {
+    oldHashMap[sliceToHashArray(oldHash)] = true
+    
     // This wasn't deleted by the pass above, so it must not have been in the
     // new ref set. Therefore, it must have been removed since then.
     diffs.DeletedRefs = append(diffs.DeletedRefs, oldRef)
+  }
+  
+  for hash, _ := range newHashMap {
+    diffs.NewHashes = append(diffs.NewHashes, hash)
+  }
+  for hash, _ := range oldHashMap {
+    diffs.OldHashes = append(diffs.OldHashes, hash)
   }
   
   return diffs
@@ -249,6 +263,16 @@ func RecordRepoRefs(repoPath string, timestamp time.Time,
       ChangedRefs: make(map[string][]byte),
       DeletedRefs: make([]string, 0),
     }
+    
+    // Create a list of new hashes
+    newHashMap := make(map[[hashLen]byte]bool)
+    for _, newHash := range refs {
+      newHashMap[sliceToHashArray(newHash)] = true
+    }
+    for hash, _ := range newHashMap {
+      diffs.NewHashes = append(diffs.NewHashes, hash)
+    }
+    
     writeDiffs = diffs
   case err != nil:
     return diffs, oldRefs, err
@@ -289,10 +313,11 @@ func RecordRepoRefs(repoPath string, timestamp time.Time,
   }
   
   // Write the diffs to the database
+  refStamp := timestamp.Unix()
   _, err = r.Db("gitglob").Table("refs_history").Insert(
     map[string]interface{}{
       "addr": repoPath,
-      "refStamp": timestamp.Unix(),
+      "refStamp": refStamp,
       "type": writeDiffs.Type,
       "from": writeDiffs.From,
       "new": writeDiffs.NewRefs,
@@ -326,7 +351,7 @@ func RecordRepoRefs(repoPath string, timestamp time.Time,
   }
   
   // Write timestamps
-  err = binary.Write(currentRefpack.File, binary.BigEndian, timestamp.Unix())
+  err = binary.Write(currentRefpack.File, binary.BigEndian, refStamp)
   if err != nil {
     return diffs, oldRefs, err
   }

@@ -41,6 +41,8 @@ type refDiffs struct {
   NewRefs map[string][]byte
   ChangedRefs map[string][]byte
   DeletedRefs []string
+  NewHashes [][hashLen]byte
+  OldHashes [][hashLen]byte
 }
 
 type commitFetchJob struct {
@@ -79,7 +81,7 @@ func influxWritePoint(measurement string, tags map[string]string,
       // Ignore this: we shouldn't have timed out, but it's better to keep going
       // than to die here.
     } else {
-      panic(err.Error())
+      // panic(err.Error())
     }
   }
 }
@@ -211,38 +213,76 @@ func HaveCommit(commithash [hashLen]byte) (bool, error) {
   return objloc.Existed, nil
 }
 
-func DownloadNewCommits(repoPath string, baseCommits [][hashLen]byte,
-  newCommits [][hashLen]byte) (string, error) {
-  fmt.Println("Considering", len(newCommits), "commit(s)")
-  neededCommits := make([]string, len(newCommits))
-  addedCommits := 0
-  for _, commithash := range newCommits {
-    exists, err := HaveCommit(commithash); if err != nil {
-      return "", err
+func DownloadNewCommits(repoPath string, diffs refDiffs,
+    forceFull bool) (string, error) {
+  fmt.Println("Considering", len(diffs.NewHashes)+len(diffs.OldHashes),
+    "commit(s)")
+  
+  haveHashMap := make(map[[hashLen]byte]bool)
+  wantHashMap := make(map[[hashLen]byte]bool)
+  var lastWanted [hashLen]byte
+  
+  if forceFull {
+    // We want to get a full pack, so don't bother looking at old hashes.
+    for _, hash := range diffs.NewHashes {
+      wantHashMap[hash] = true
+      lastWanted = hash
     }
-    
-    if (!exists) {
-      neededCommits[addedCommits] = hex.EncodeToString(commithash[:])
-      addedCommits += 1
+  } else {
+    // We should actually check which hashes we already have.
+    for _, hash := range diffs.OldHashes {
+      exists, err := HaveCommit(hash); if err != nil {
+        return "", err
+      }
+      
+      if exists {
+        haveHashMap[hash] = true
+      }
+    }
+    for _, hash := range diffs.NewHashes {
+      _, ok := haveHashMap[hash]
+      if !ok {
+        // We either didn't check this object or we didn't have it. Check to see
+        // if we do have it.
+        exists, err := HaveCommit(hash); if err != nil {
+          return "", err
+        }
+        
+        if exists {
+          // We have the object already, so say we have it and don't request it.
+          haveHashMap[hash] = true
+        } else {
+          // We don't have the object and it was advertised, so request it.
+          wantHashMap[hash] = true
+          lastWanted = hash
+        }
+      } else {
+        // We already know we have this object, so we don't have to do anything.
+      }
     }
   }
-  fmt.Println("Need", addedCommits, "commit(s)")
   
-  if addedCommits == 0 {
+  fmt.Println("Need", len(wantHashMap), "commit(s)")
+  
+  if len(wantHashMap) == 0 {
     return "", nil
   }
+  
+  delete(wantHashMap, lastWanted)
   
   // multi_ack_detailed might be useful, but we don't process it right now.
   // thin-pack is required to allow received packfiles to reference objects we
   // already have.
   // side-band-64k allows sending sideband packets of >1k at a time.
-  request, err := BuildPktLine([]byte("want " + neededCommits[0] +
+  request, err := BuildPktLine([]byte("want " +
+    hex.EncodeToString(lastWanted[:]) +
     " thin-pack side-band-64k agent=gitglob/0.0.1\n"))
   if err != nil {
     return "", err
   }
-  for _, commithash := range neededCommits[1:addedCommits] {
-    nextLine, err := BuildPktLine([]byte("want "+commithash+"\n"))
+  for commithash, _ := range wantHashMap {
+    nextLine, err := BuildPktLine([]byte("want "+
+      hex.EncodeToString(commithash[:])+"\n"))
     if err != nil {
       return "", err
     }
@@ -254,7 +294,7 @@ func DownloadNewCommits(repoPath string, baseCommits [][hashLen]byte,
   nextLine, err := BuildPktLine(nil)
   request = append(request, nextLine...)
   
-  for _, commithash := range baseCommits {
+  for commithash, _ := range haveHashMap {
     nextLine, err := BuildPktLine([]byte("have "+
       hex.EncodeToString(commithash[:])+"\n")); if err != nil {
       return "", err
@@ -435,59 +475,59 @@ func doUpdateRepoRefs(repoPath string, forceFull bool) error {
     refs[refName] = commithash
   }
   
-  newRefDiffs, oldRefs, err := RecordRepoRefs(repoPath, timestamp, refs)
+  newRefDiffs, _, err := RecordRepoRefs(repoPath, timestamp, refs)
   if err != nil {
     return err
   }
   
-  // Figure out which commit hashes are new, and which are old.
-  var newHashes [][hashLen]byte
-  var oldHashes [][hashLen]byte
-  newHashMap := make(map[[hashLen]byte]bool)
-  oldHashMap := make(map[[hashLen]byte]bool)
+  // // Figure out which commit hashes are new, and which are old.
+  // var newHashes [][hashLen]byte
+  // var oldHashes [][hashLen]byte
+  // newHashMap := make(map[[hashLen]byte]bool)
+  // oldHashMap := make(map[[hashLen]byte]bool)
   
-  // Do we need to download everything anyway?
-  // (This could happen when we failed to fetch an external delta base in an
-  // earlier update)
-  if forceFull == true {
-    for _, hash := range refs {
-      newHashMap[sliceToHashArray(hash)] = true
-    }
-  } else {
-    // Start with the old ones, as we know we have them.
-    for _, hash := range oldRefs {
-      oldHashMap[sliceToHashArray(hash)] = true
-    }
-    for hash, _ := range oldHashMap {
-      oldHashes = append(oldHashes, hash)
-    }
-    // Then see which ones are newly referenced.
-    for _, hash := range newRefDiffs.NewRefs {
-      newHashMap[sliceToHashArray(hash)] = true
-    }
-    for _, hash := range newRefDiffs.ChangedRefs {
-      newHashMap[sliceToHashArray(hash)] = true
-    }
-  }
-  for hash, _ := range newHashMap {
-    // Call the hash new only if we didn't just say we have it.
-    // This could happen if, for example, a new tag were created for the current
-    // master HEAD commit.
-    _, ok := oldHashMap[hash]
-    if !ok {
-      newHashes = append(newHashes, hash)
-    }
-  }
+  // // Do we need to download everything anyway?
+  // // (This could happen when we failed to fetch an external delta base in an
+  // // earlier update)
+  // if forceFull == true {
+  //   for _, hash := range refs {
+  //     newHashMap[sliceToHashArray(hash)] = true
+  //   }
+  // } else {
+  //   // Start with the old ones, as we know we have them.
+  //   for _, hash := range oldRefs {
+  //     oldHashMap[sliceToHashArray(hash)] = true
+  //   }
+  //   for hash, _ := range oldHashMap {
+  //     oldHashes = append(oldHashes, hash)
+  //   }
+  //   // Then see which ones are newly referenced.
+  //   for _, hash := range newRefDiffs.NewRefs {
+  //     newHashMap[sliceToHashArray(hash)] = true
+  //   }
+  //   for _, hash := range newRefDiffs.ChangedRefs {
+  //     newHashMap[sliceToHashArray(hash)] = true
+  //   }
+  // }
+  // for hash, _ := range newHashMap {
+  //   // Call the hash new only if we didn't just say we have it.
+  //   // This could happen if, for example, a new tag were created for the current
+  //   // master HEAD commit.
+  //   _, ok := oldHashMap[hash]
+  //   if !ok {
+  //     newHashes = append(newHashes, hash)
+  //   }
+  // }
   
-  fmt.Printf("%d new hashes to fetch, %d old hashes to reference. Based on %d\n",
-    len(newHashes), len(oldHashes), newRefDiffs.From)
+  // fmt.Printf("%d new hashes to fetch, %d old hashes to reference. Based on %d\n",
+  //   len(newHashes), len(oldHashes), newRefDiffs.From)
   
-  fmt.Printf("%d base commits, %d commits to request from %s\n",
-    len(oldHashes), len(newHashes), repoPath)
+  // fmt.Printf("%d base commits, %d commits to request from %s\n",
+  //   len(oldHashes), len(newHashes), repoPath)
   
   // If we have new commits to download, do that.
-  if len(newHashes) > 0 {
-    filename, err := DownloadNewCommits(repoPath, oldHashes, newHashes)
+  if true {
+    filename, err := DownloadNewCommits(repoPath, newRefDiffs, forceFull)
     if err == nil {
       // Queue processing of this packfile, if we wrote one. The packfile
       // filename may be blank if for some reason we already had all of these
