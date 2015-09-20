@@ -66,6 +66,7 @@ type gitPackfile struct {
 
 type globpackObjLoc struct {
   Filename string     // The filename this object was written to
+  Filenum uint64      // The number from the file this object was written to
   Position uint64     // The byte in the file this object starts on
   Hash [hashLen]byte  // Object hash, may be nil
   Existed bool        // Did the object already exist?
@@ -152,8 +153,7 @@ func gitpackReaderStatsReporter() {
 }
 
 func GlobpackNameToDirectory(name string) (string, error) {
-  if len(name) != len("gitglob_YYYYMMDDHHIISS_123.globpack") &&
-     len(name) != len("gitglob_YYYYMMDDHHIISS_123456.globpack") { // TODO: Temporary
+  if len(name) != len("gitglob_YYYYMMDDHHIISS123.globpack") {
     return "", errors.New("Incorrect globpack name length.")
   }
   

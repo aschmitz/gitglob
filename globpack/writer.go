@@ -11,11 +11,13 @@ import (
   "os"
   "runtime"
   "time"
+  "strconv"
   "sync"
   "sync/atomic"
   
   "gitlab.lardbucket.org/aschmitz/gitglob/debugging/flate"
   r "github.com/dancannon/gorethink"
+  "github.com/garyburd/redigo/redis"
 )
 
 const (
@@ -57,6 +59,7 @@ type globpackWriteRequest struct {
 
 type globpack struct {
   Filename string // The filename of this globpack
+  Filenum uint64  // The number from the filename of this globpack
   Length uint64   // The length of the globpack (so far)
   File *os.File   // The actual file object
   Hash hash.Hash  // The checksum generator for this file
@@ -333,10 +336,15 @@ func CloseGlobpackWriter() error {
 func initGlobpack() (*globpack, error) {
   pack := new(globpack)
   errorCount := 0
+  var err error
   for {
     packTime := time.Now().UTC()
-    pack.Filename = "gitglob_"+packTime.Format("20060102150405")+"_"+
-      fmt.Sprintf("%03d", rand.Intn(1000))+".globpack"
+    numStr := packTime.Format("20060102150405")+
+      fmt.Sprintf("%03d", rand.Intn(1000))
+    pack.Filename = "gitglob_"+numStr+".globpack"
+    pack.Filenum, err = strconv.ParseUint(numStr, 10, 64); if err != nil {
+      panic(err)
+    }
     
     packDir, err := GlobpackNameToDirectory(pack.Filename); if err != nil {
       return nil, err
@@ -466,6 +474,10 @@ func drainWriterBuf(buf []byte, pendingAcks []*globpackWriteRecord) {
   writerMutex.Lock()
   // Again, we don't defer the unlock, because there's no safe recovery from a
   // failure here.
+  redisConn, err := redis.Dial("tcp", ":16379"); if err != nil {
+    panic(err)
+  }
+  defer redisConn.Close()
   
   if haveCurrentGlobpack == false {
     panic("no currently open globpack")
@@ -492,22 +504,22 @@ func drainWriterBuf(buf []byte, pendingAcks []*globpackWriteRecord) {
   
   // Get a list of objects to write. This allows sending all the inserts at
   // once.
-  var insertObjects []map[string]interface{}
-  for _, pendingAck := range pendingAcks {
-    insertObjects = append(insertObjects, map[string]interface{}{
-        "id": pendingAck.Ack.Hash[:],
-        "file": pendingAck.Ack.Filename,
-        "loc": pendingAck.Ack.Position,
-      })
+  redisInsertObjects := make([]interface{}, len(pendingAcks) * 2)
+  for i, pendingAck := range pendingAcks {
+    redisObjLoc := make([]byte, 2 * 8)
+    binary.LittleEndian.PutUint64(redisObjLoc[0:8], pendingAck.Ack.Filenum)
+    binary.LittleEndian.PutUint64(redisObjLoc[8:16], pendingAck.Ack.Position)
+    
+    redisInsertObjects[i*2] = pendingAck.Ack.Hash[:]
+    redisInsertObjects[i*2+1] = redisObjLoc
   }
   
   // Actually do the writing to the database.
-  res, err := r.Db("gitglob").Table("objects").Insert(insertObjects).
-    RunWrite(rSession)
+  _, err = redisConn.Do("MSET", redisInsertObjects...)
   if err != nil {
     fmt.Println(err.Error())
   }
-  fmt.Printf("Inserted %d\n", res.Inserted)
+  fmt.Printf("Inserted %d\n", len(redisInsertObjects))
   
   // Notify the writers that their requests have been written.
   for _, pendingAck := range pendingAcks {
@@ -572,6 +584,7 @@ func writer(writes <-chan *globpackWriteData) {
     buf = objBuf
     ack := globpackObjLoc{
       Filename: currentGlobpack.Filename,
+      Filenum: currentGlobpack.Filenum,
       Position: currentGlobpack.Length,
       Hash: writeData.Hash,
     }
@@ -607,6 +620,7 @@ func writer(writes <-chan *globpackWriteData) {
         buf = append(buf, objBuf...)
         ack := globpackObjLoc{
           Filename: currentGlobpack.Filename,
+          Filenum: currentGlobpack.Filenum,
           Position: currentGlobpack.Length,
           Hash: writeData.Hash,
         }

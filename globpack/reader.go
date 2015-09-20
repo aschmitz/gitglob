@@ -10,10 +10,11 @@ import (
   "io/ioutil"
   "os"
   "time"
+  "strconv"
   "sync/atomic"
   
   "gitlab.lardbucket.org/aschmitz/gitglob/debugging/flate"
-  r "github.com/dancannon/gorethink"
+  "github.com/garyburd/redigo/redis"
 )
 
 const (
@@ -88,23 +89,32 @@ func LookupObjLocation(id [hashLen]byte) (*globpackObjLoc, error) {
   return res, nil
 }
 
+func FilenumToFilename(filenum uint64) string {
+  return "gitglob_"+strconv.FormatUint(filenum, 10)+".globpack"
+}
+
 func lookupWatcher(lookups <-chan *globpackLookupRequest) {
-  var row map[string]interface{}
+  redisConn, err := redis.Dial("tcp", ":16379"); if err != nil {
+    panic(err)
+  }
+  defer redisConn.Close()
   
   for {
-    row = nil
     lookupReq := <-lookups
-    res, err := r.Db("gitglob").Table("objects").Get(lookupReq.Hash[:]).Run(rSession)
-    if err != nil {
+    
+    redisRes, err := redisConn.Do("GET", lookupReq.Hash[:]); if err != nil {
       panic(err)
     }
-    res.One(&row)
+    
     atomic.AddUint64(&globpackReaderStats.LookedUp, 1)
-    if row != nil {
+    if redisRes != nil {
+      redisVal := redisRes.([]byte)
       atomic.AddUint64(&globpackReaderStats.Existed, 1)
+      filenum := binary.LittleEndian.Uint64(redisVal[0:8])
       locObj := globpackObjLoc {
-        Filename: row["file"].(string),
-        Position: uint64(row["loc"].(float64)),
+        Filename: FilenumToFilename(filenum),
+        Filenum: filenum,
+        Position: binary.LittleEndian.Uint64(redisVal[8:16]),
         Existed: true,
         Context: lookupReq.Context,
       }
