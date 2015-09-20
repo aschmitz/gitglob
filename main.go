@@ -760,7 +760,10 @@ func main() {
   // })
   
   var queue string
-  flag.StringVar(&queue, "queue", "update", "The queue to watch: 'update' or"+
+  var just_pack string
+  
+  flag.StringVar(&just_pack, "just_pack", "", "Just read one packfile.")
+  flag.StringVar(&queue, "queue", "", "The queue to watch: 'update' or"+
     " 'pack'.")
   flag.Parse()
   
@@ -781,6 +784,16 @@ func main() {
   //   panic(err.Error())
   // }
   // return
+  
+  if just_pack != "" {
+    packfileContents, err := ioutil.ReadFile(just_pack); if err != nil {
+      panic(err.Error())
+    }
+    err = globpack.LoadPackfile(packfileContents, "http://localhost/testpack.pack"); if err != nil {
+      panic(err.Error())
+    }
+    return
+  }
   
   switch queue {
   case "update":
