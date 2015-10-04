@@ -647,17 +647,17 @@ fmt.Printf("Will read: %+v\n", packFullPath)
         }
       }
       
-      // Delete the pack from disk.
-      err = os.Remove(packFullPath); if err != nil {
-        panic(err.Error())
-      }
+      // // Delete the pack from disk.
+      // err = os.Remove(packFullPath); if err != nil {
+      //   panic(err.Error())
+      // }
       
-      // Delete the pack from the list of packs that need to be read.
-      res, err = r.Db("gitglob").Table("queued_packs").Get(packDetails["id"]).
-        Delete().RunWrite(rSession)
-      if err != nil {
-        panic(err.Error())
-      }
+      // // Delete the pack from the list of packs that need to be read.
+      // res, err = r.Db("gitglob").Table("queued_packs").Get(packDetails["id"]).
+      //   Delete().RunWrite(rSession)
+      // if err != nil {
+      //   panic(err.Error())
+      // }
     }
   }
 }
