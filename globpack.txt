@@ -87,10 +87,11 @@ data loss.
 Objects are stored in a fashion which is reminiscent of Git's object storage,
 with some differences. To allow identifying objects without walking all
 globpacks to identify roots for delta objects, the object ID of each object is
-stored with the object. Addiionally, no OFS_DELTA (delta from an object with a
+stored with the object. Additionally, no OFS_DELTA (delta from an object with a
 given offset in a pack) objects are allowed. Notably, REF_DELTA (delta from an
-object with a given hash) objects are allowed. Finally, objects may or may not
-be compressed individually.
+object with a given hash) objects are encoded with the delta flag set and use
+the base object's type. Finally, objects may or may not be compressed
+individually.
 
 The globpack format for non-delta objects is as follows:
 bytes      | description
