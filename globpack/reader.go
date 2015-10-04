@@ -146,6 +146,7 @@ func GetObject(id [hashLen]byte) (*gitObject, error) {
   file, err := os.Open(path); if err != nil {
     return nil, err
   }
+  defer file.Close()
   
   pos, err := file.Seek(int64(loc.Position), os.SEEK_SET); if err != nil {
     return nil, err
