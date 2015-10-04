@@ -3,10 +3,6 @@ require 'rubygems'
 require 'hexdump'
 require 'zlib'
 require 'digest'
-require 'rethinkdb'
-include RethinkDB::Shortcuts
-
-conn = r.connect(host: "localhost", port: 28015)
 
 Encoding.default_external = 'BINARY'
 STATIC_HEADER = "gpak\x00\x0d\x0a\xa5"
@@ -25,6 +21,20 @@ pack = File.open(ARGV[0])
 globpack_name = File.basename(ARGV[0])
 marked_object = [ARGV[1]].pack('H40')
 
+print "Reading scanned keys... "
+expected = []
+scanned_file = File.new('scanned_keys.txt')
+scanned_file.each do |line|
+  if match = line.match(/Expecting ([0-9a-f]{40}) at (\d+):(\d+)$/)
+    expected << [match[3].to_i, [match[1]].pack('H40')]
+  end
+end
+scanned_file.close
+print "Sorting... "
+expected.sort_by!(&:first)
+expected_index = 0
+puts "Done."
+
 # Read and verify header (sans checksum, we'll do that later)
 header = pack.read(52)
 if header.length != 52
@@ -37,10 +47,10 @@ if header[8..11] != VERSION_NUMBER
   raise 'Unknown globpack version.'
 end
 expected_length = header[12..19].unpack('Q>').first
-# if File.size(pack) != expected_length
-#   raise "Incorrect globpack length. (File said #{expected_length}, really was "+
-#     "#{File.size(pack)})"
-# end
+if File.size(pack) != expected_length
+  # raise "Incorrect globpack length. (File said #{expected_length}, really was "+
+  #   "#{File.size(pack)})"
+end
 expected_checksum = header[20..51]
 pos = 52
 
@@ -58,6 +68,15 @@ objects = {}
 while not pack.eof?
   objpos = pos
   hash_data = pack.read(20)
+  
+  expected_obj = expected[expected_index]
+  if expected_obj[1] != hash_data
+    raise "Unexpected object at position #{pos}. Expected #{expected_obj[1].unpack('H40')[0]}, got #{hash_data.unpack('H40')[0]}."
+  end
+  if expected_obj[0] != pos
+    raise "Unexpected position for object #{hash_data.unpack('H40')[0]}! Expected #{expected_obj[0]}, got #{pos}."
+  end
+  
   checksum_digest.update hash_data
   
   type = pack.read(1)
@@ -133,9 +152,3 @@ to_insert = objects.map{|hash, loc| {
   loc: loc,
   file: globpack_name
 }}
-# res = r.db('gitglob_2').table('objects').insert(to_insert,
-#   conflict: 'update').run(conn)
-# if res['errors'] > 0
-#   raise "RethinkDB Error(s): #{res['errors']} errors. First error:\n"+
-#     res['first_error']
-# end
