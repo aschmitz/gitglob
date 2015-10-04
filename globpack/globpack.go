@@ -51,6 +51,8 @@ type gitObject struct {
   CompressedType int // The type of compressed data stored
   CompressedLevel int // The compression level claimed for the compressed data
   GitpackSize int    // TODO: For debugging, should probably be removed
+  // The number of outstanding locks on the object's decompressed data
+  DecompressedLockCount uint32
 }
 
 type gitPackfile struct {
@@ -363,6 +365,22 @@ func (obj *gitObject) DecompressIfNecessary() error {
   return nil
 }
 
+func (obj *gitObject) LockDecompressedData() {
+  atomic.AddUint32(&obj.DecompressedLockCount, 1)
+}
+
+func (obj *gitObject) UnlockDecompressedData() {
+  // From the go atomic documentation:
+  // "In particular, to decrement x, do AddUint32(&x, ^uint32(0))."
+  remaining := atomic.AddUint32(&obj.DecompressedLockCount, ^uint32(0))
+  
+  // Can we clear the decompressed data?
+  if remaining == 0 && obj.CompressedType != objCompressedNone {
+    obj.Delta = nil
+    obj.Data = nil
+  }
+}
+
 func GetObjectTypeString(objType int) string {
   switch objType {
     case gitTypeCommit: return "commit"
@@ -392,7 +410,9 @@ func ApplyDelta(sourceObj *gitObject, destObj *gitObject) error {
   }
   
   if uint64(len(source)) != sourceLen {
-    return errors.New("Unexpected mismatch in delta source length.")
+    fmt.Printf("Source object: %+v\n", sourceObj)
+    return errors.New(fmt.Sprintf("Unexpected mismatch in delta source length."+
+      " Expected %d, got %d.", len(source), sourceLen))
   }
   
   dest := new(bytes.Buffer)
@@ -512,8 +532,8 @@ func resolvePackfileObjectsFromBase(packfile *gitPackfile, base *gitObject,
     
     // Write the object. Don't let the writer clear the uncompressed data, as we
     // might need it for a descendant diff.
+    obj.LockDecompressedData()
     WriteObject(&globpackWriteRequest{
-      CanClearUncompressed: false,
       Object: obj,
       AckChan: ackChan,
     })
@@ -521,6 +541,9 @@ func resolvePackfileObjectsFromBase(packfile *gitPackfile, base *gitObject,
     if _, ok := packfile.DescendedFrom[obj.Hash]; ok {
       resolvePackfileObjectsFromBase(packfile, obj, ackChan)
     }
+    
+    // We're done with any descendants, so free the data if we can.
+    obj.UnlockDecompressedData()
   }
   
   delete(packfile.DescendedFrom, base.Hash)
@@ -581,10 +604,9 @@ func LoadPackfile(packfile []byte, repoPath string) error {
       // Get ready to write this object out.
       obj.AddHash()
       
-      // Write the object. We may not even need to touch it later, so say that
-      // the writer can clear the uncompressed data when it's done.
+      // Write the object. We may need to use it later, so hold on to its data.
+      obj.LockDecompressedData()
       WriteObject(&globpackWriteRequest{
-        CanClearUncompressed: true,
         Object: obj,
         AckChan: ackChan,
       })
@@ -592,6 +614,7 @@ func LoadPackfile(packfile []byte, repoPath string) error {
       // Store this as a base object.
       packObj.BaseObjects = append(packObj.BaseObjects, obj)
     }
+    // fmt.Printf("Read object %40x\n", obj.Hash)
   }
 fmt.Printf("First pass: %d plain objects, %d distinct delta bases\n", len(packObj.BaseObjects), len(packObj.DescendedFrom))
   numBaseObjects := len(packObj.BaseObjects)
@@ -606,8 +629,15 @@ fmt.Printf("First pass: %d plain objects, %d distinct delta bases\n", len(packOb
   for _, obj := range packObj.BaseObjects {
     if _, ok := packObj.DescendedFrom[obj.Hash]; ok {
       obj.DecompressIfNecessary()
-      resolvePackfileObjectsFromBase(packObj, obj, ackChan)
+      // fmt.Printf("Recursing through object %40x\n", obj.Hash)
+      err := resolvePackfileObjectsFromBase(packObj, obj, ackChan)
+      if err != nil {
+        panic(err)
+      }
     }
+    
+    // Free our lock on the decompressed data, as we're done with it here.
+    obj.UnlockDecompressedData()
   }
 fmt.Printf("Second pass: %d distinct delta bases remain.\n", len(packObj.DescendedFrom))
   numExternalBases := len(packObj.DescendedFrom)
@@ -621,9 +651,12 @@ fmt.Printf("Second pass: %d distinct delta bases remain.\n", len(packObj.Descend
   //       Next iteration
   for baseHash, _ := range packObj.DescendedFrom {
     if base, err := GetObject(baseHash); err == nil {
-      resolvePackfileObjectsFromBase(packObj, base, ackChan)
-    // } else {
-    //   fmt.Printf("Second pass unknown base object %x, err: %+v\n", baseHash, err)
+      err = resolvePackfileObjectsFromBase(packObj, base, ackChan)
+      if err != nil {
+        panic(err)
+      }
+    } else {
+      fmt.Printf("Second pass unknown base object %x, err: %+v\n", baseHash, err)
     }
   }
   
@@ -639,6 +672,11 @@ fmt.Printf("Second pass: %d distinct delta bases remain.\n", len(packObj.Descend
       "value": 1,
       "repo_path": repoPath,
     })
+fmt.Printf("Couldn't resolve external refs:\n")
+for baseHash, _ := range packObj.DescendedFrom {
+  fmt.Printf("  %x\n", baseHash)
+}
+panic(CouldntResolveExternalDeltasError)
     return CouldntResolveExternalDeltasError
   }
   

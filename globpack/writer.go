@@ -51,7 +51,6 @@ type globpackWriteRecord struct {
 }
 
 type globpackWriteRequest struct {
-  CanClearUncompressed bool // Can we clear the uncompressed data after writing?
   Object *gitObject // The gitObject to write
   // A channel to write to for indicating the write is done
   AckChan chan<- *globpackObjLoc
@@ -64,6 +63,7 @@ type globpack struct {
   File *os.File   // The actual file object
   Hash hash.Hash  // The checksum generator for this file
   ObjCount int    // The number of objects in this file
+  NeedsRotation bool // Whether or not this globpack needs to be rotated
 }
 
 var haveCurrentGlobpack = false
@@ -72,6 +72,7 @@ var compressChan chan *globpackWriteRequest
 var writeChan chan *globpackWriteData
 var writerLookupChan chan *globpackObjLoc
 var writerMutex sync.Mutex
+var redisConn redis.Conn
 
 type globpackWriterStatsType struct {
   // In order to keep Written and Deltas (closely) in sync, we don't actually
@@ -147,12 +148,9 @@ func handleCompression() {
       atomic.AddUint64(&globpackWriterStats.Deltas, 1)
     }
     
-    // We now know what we want to write. Can we clear this from the object?
-    if writeReq.CanClearUncompressed &&
-      obj.CompressedType != objCompressedNone {
-      obj.Delta = nil
-      obj.Data = nil
-    }
+    // We now know what we want to write. Release our hold on the decompressed
+    // data.
+    obj.UnlockDecompressedData()
     
     atomic.AddUint64(&globpackWriterStats.UncompressedSize,
       uint64(len(toWrite)))
@@ -234,8 +232,11 @@ func rotateGlobpackRegularly() {
     
     <- time.After(diffTime)
     
-    // Finally, we should be at the top of an hour. Rotate.
-    rotateGlobpack()
+    // Finally, we should be at the top of an hour. Mark this globpack as
+    // needing to be rotated. Note that we don't do it ourselves here, because
+    // there may already be a buffer of objects waiting to be written. This flag
+    // will get checked with the next object that is written.
+    currentGlobpack.NeedsRotation = true
   }
 }
 
@@ -293,6 +294,10 @@ func initGlobpackWriter() error {
     currentGlobpack, err = initGlobpack(); if err != nil {
       return err
     }
+    
+    redisConn, err = redis.Dial("tcp", ":16379"); if err != nil {
+      panic(err)
+    }
   
     globpackWriterStats = &globpackWriterStatsType{}
     go globpackWriterStatsReporter()
@@ -328,6 +333,7 @@ func CloseGlobpackWriter() error {
     if err := closeGlobpack(currentGlobpack); err != nil {
       return err
     }
+    redisConn.Close()
   }
   
   return nil
@@ -378,6 +384,7 @@ func initGlobpack() (*globpack, error) {
   pack.Length = 0
   pack.ObjCount = 0
   pack.Hash = sha256.New()
+  pack.NeedsRotation = false
   
   // Globpack header:
   // bytes | description
@@ -474,10 +481,6 @@ func drainWriterBuf(buf []byte, pendingAcks []*globpackWriteRecord) {
   writerMutex.Lock()
   // Again, we don't defer the unlock, because there's no safe recovery from a
   // failure here.
-  redisConn, err := redis.Dial("tcp", ":16379"); if err != nil {
-    panic(err)
-  }
-  defer redisConn.Close()
   
   if haveCurrentGlobpack == false {
     panic("no currently open globpack")
@@ -519,7 +522,7 @@ func drainWriterBuf(buf []byte, pendingAcks []*globpackWriteRecord) {
   if err != nil {
     fmt.Println(err.Error())
   }
-  fmt.Printf("Inserted %d\n", len(redisInsertObjects))
+  fmt.Printf("Inserted %d\n", len(pendingAcks))
   
   // Notify the writers that their requests have been written.
   for _, pendingAck := range pendingAcks {
@@ -528,6 +531,8 @@ func drainWriterBuf(buf []byte, pendingAcks []*globpackWriteRecord) {
 }
 
 func WriteObject(writeReq *globpackWriteRequest) {
+  // We want the decompressed data, don't let it get freed yet.
+  writeReq.Object.LockDecompressedData()
   lookupChan <- &globpackLookupRequest{
     Hash: writeReq.Object.Hash,
     ResChan: writerLookupChan,
@@ -569,8 +574,8 @@ func writer(writes <-chan *globpackWriteData) {
     // writable block, we also check to make sure this isn't the first object in
     // the file. (If it is, we'll have to write it anyway: the file can't get
     // any smaller.)
-    if (currentGlobpack.Length + uint64(len(objBuf)) > maxGlobpackSize) &&
-      (currentGlobpack.ObjCount > 0) {
+    if ((currentGlobpack.Length + uint64(len(objBuf)) > maxGlobpackSize) &&
+      (currentGlobpack.ObjCount > 0)) || currentGlobpack.NeedsRotation {
       // Rotate globpacks.
       drainWriterBuf(buf, pendingAcks)
       buf = buf[:0]
@@ -606,7 +611,8 @@ func writer(writes <-chan *globpackWriteData) {
         // Does this spill into a new file? Here, we don't check to see if this
         // is the first object in a globfile, as it can't be: we just read at
         // least one object to start this buffer.
-        if currentGlobpack.Length + uint64(len(objBuf)) > maxGlobpackSize {
+        if (currentGlobpack.Length + uint64(len(objBuf)) > maxGlobpackSize) ||
+            currentGlobpack.NeedsRotation {
           // Rotate globpacks.
           drainWriterBuf(buf, pendingAcks)
           buf = buf[:0]
