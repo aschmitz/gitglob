@@ -55,7 +55,7 @@ func globpackReaderStatsReporter() {
   oldExisted := uint64(0)
   oldRead := uint64(0)
   for {
-    time.Sleep(time.Minute) // Every minute,
+    time.Sleep(15 * time.Second) // Every 15 seconds,
     
     // Read the new values and calculate what to store
     curLookedUp := atomic.LoadUint64(&globpackReaderStats.LookedUp)

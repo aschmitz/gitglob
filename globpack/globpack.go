@@ -135,7 +135,7 @@ func gitpackReaderStatsReporter() {
   oldObjects := uint64(0)
   oldDeltas := uint64(0)
   for {
-    time.Sleep(time.Minute) // Every minute,
+    time.Sleep(15 * time.Second) // Every 15 seconds,
     
     // Read the new values and calculate what to store
     curObjects := atomic.LoadUint64(&gitpackReaderStats.Objects)

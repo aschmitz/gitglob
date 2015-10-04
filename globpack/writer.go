@@ -260,7 +260,7 @@ func globpackWriterStatsReporter() {
   oldUncompressedSize := uint64(0)
   oldCompressedSize := uint64(0)
   for {
-    time.Sleep(time.Minute) // Every minute,
+    time.Sleep(15 * time.Second) // Every 15 seconds,
     
     // Read the new values and calculate what to store
     curWritten := atomic.LoadUint64(&globpackWriterStats.Written)
