@@ -545,6 +545,9 @@ func objectExistenceHandler() {
     lookupResp := <- writerLookupChan
     writeReq := lookupResp.Context.(*globpackWriteRequest)
     if lookupResp.Existed {
+      // We no longer need the data from this object.
+      writeReq.Object.UnlockDecompressedData()
+      // Respond to the request
       lookupResp.Context = nil
       writeReq.AckChan <- lookupResp
     } else {
