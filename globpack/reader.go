@@ -9,6 +9,7 @@ import (
   "io"
   "io/ioutil"
   "os"
+  "runtime"
   "time"
   "strconv"
   "sync/atomic"
@@ -18,7 +19,7 @@ import (
 )
 
 const (
-  parallelLookupGoroutines = 100
+  parallelLookupGoroutines = 0
   lookupChanBuffer = 1024
   lookupMaxBatchSize = 100
 )
@@ -42,7 +43,11 @@ var lookupChan chan *globpackLookupRequest
 func init() {
   if lookupChan == nil {
     lookupChan = make(chan *globpackLookupRequest, lookupChanBuffer)
-    for threadOn := 0; threadOn < parallelLookupGoroutines; threadOn++ {
+    lookupThreads := parallelLookupGoroutines
+    if lookupThreads == 0 {
+      lookupThreads = runtime.NumCPU()
+    }
+    for threadOn := 0; threadOn < lookupThreads; threadOn++ {
       go lookupWatcher(lookupChan)
     }
     
