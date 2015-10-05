@@ -20,6 +20,7 @@ import (
 const (
   parallelLookupGoroutines = 100
   lookupChanBuffer = 1024
+  lookupMaxBatchSize = 100
 )
 
 type globpackReaderStatsType struct {
@@ -98,35 +99,58 @@ func lookupWatcher(lookups <-chan *globpackLookupRequest) {
     panic(err)
   }
   defer redisConn.Close()
+  var lookupBuf []*globpackLookupRequest
+  var lookupHashes []interface{}
+  existedCount := uint64(0)
   
   for {
     lookupReq := <-lookups
+    lookupBuf = append(lookupBuf, lookupReq)
+    lookupHashes = append(lookupHashes, lookupReq.Hash[:])
     
-    redisRes, err := redisConn.Do("GET", lookupReq.Hash[:]); if err != nil {
+    drain:
+    for len(lookupBuf) < lookupMaxBatchSize {
+      select {
+        case lookupReq = <-lookups:
+          lookupBuf = append(lookupBuf, lookupReq)
+          lookupHashes = append(lookupHashes, lookupReq.Hash[:])
+        default:
+          break drain
+      }
+    }
+    
+    redisRes, err := redisConn.Do("MGET", lookupHashes...); if err != nil {
       panic(err)
     }
     
-    atomic.AddUint64(&globpackReaderStats.LookedUp, 1)
-    if redisRes != nil {
-      redisVal := redisRes.([]byte)
-      atomic.AddUint64(&globpackReaderStats.Existed, 1)
-      filenum := binary.LittleEndian.Uint64(redisVal[0:8])
-      locObj := globpackObjLoc {
-        Filename: FilenumToFilename(filenum),
-        Filenum: filenum,
-        Position: binary.LittleEndian.Uint64(redisVal[8:16]),
-        Existed: true,
-        Context: lookupReq.Context,
+    for index, lookupRes := range redisRes.([]interface{}) {
+      if lookupRes != nil {
+        redisVal := lookupRes.([]byte)
+        existedCount += 1
+        filenum := binary.LittleEndian.Uint64(redisVal[0:8])
+        locObj := globpackObjLoc {
+          Filename: FilenumToFilename(filenum),
+          Filenum: filenum,
+          Position: binary.LittleEndian.Uint64(redisVal[8:16]),
+          Existed: true,
+          Context: lookupBuf[index].Context,
+        }
+        locObj.Context = lookupBuf[index].Context
+        lookupBuf[index].ResChan <- &locObj
+      } else {
+        locObj := globpackObjLoc {
+          Existed: false,
+          Context: lookupBuf[index].Context,
+        }
+        lookupBuf[index].ResChan <- &locObj
       }
-      locObj.Context = lookupReq.Context
-      lookupReq.ResChan <- &locObj
-    } else {
-      locObj := globpackObjLoc {
-        Existed: false,
-        Context: lookupReq.Context,
-      }
-      lookupReq.ResChan <- &locObj
     }
+    
+    atomic.AddUint64(&globpackReaderStats.LookedUp, uint64(len(lookupBuf)))
+    atomic.AddUint64(&globpackReaderStats.Existed, existedCount)
+    lookupBuf = lookupBuf[:0]
+    lookupHashes = lookupHashes[:0]
+    existedCount = 0
   }
 }
 
