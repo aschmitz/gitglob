@@ -535,6 +535,7 @@ func doUpdateRepoRefs(repoPath string, forceFull bool) error {
       if filename != "" {
         _, err = r.Db("gitglob").Table("queued_packs").Insert(
           map[string]interface{} {
+            "id": filename,
             "filename": filename,
             "repo_path": repoPath,
             "queue_time": r.Now(),
