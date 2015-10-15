@@ -536,7 +536,6 @@ func doUpdateRepoRefs(repoPath string, forceFull bool) error {
         _, err = r.Db("gitglob").Table("queued_packs").Insert(
           map[string]interface{} {
             "id": filename,
-            "filename": filename,
             "repo_path": repoPath,
             "queue_time": r.Now(),
           }).RunWrite(rSession)
@@ -615,7 +614,7 @@ func readPackQueueLoop() {
       time.Sleep(time.Second)
     } else {
       packDetails := res.Changes[0].NewValue.(map[string]interface{})
-      packFilename := packDetails["filename"].(string)
+      packFilename := packDetails["id"].(string)
       repoPath := packDetails["repo_path"].(string)
       packFullPath := storagePath+"/gitpack/"+packFilename
       
