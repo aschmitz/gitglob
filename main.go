@@ -55,6 +55,14 @@ type commitFetchJob struct {
 
 var ZeroLengthPackfile = errors.New("zero length packfile")
 
+type updateError struct {
+  s string
+  shouldRetry bool
+}
+func (e updateError) Error() string {
+  return e.s
+}
+
 var influxdbClient *influxdb.Client
 
 func influxWritePoint(measurement string, tags map[string]string,
@@ -315,8 +323,12 @@ fmt.Println(string(request))
   req.Header.Add("Content-Type", "application/x-git-upload-pack-request")
   resp, err := client.Do(req)
   if err != nil {
-    panic("failed to connect: " + err.Error())
+    return "", updateError{
+      s: "error connecting to git server for pack: "+err.Error(),
+      shouldRetry: true,
+    }
   }
+  defer resp.Body.Close()
   
   if resp.Header["Content-Type"][0] !=
       "application/x-git-upload-pack-result" {
@@ -444,7 +456,11 @@ func doUpdateRepoRefs(repoPath string, forceFull bool) error {
   req.Header.Add("Pragma", "no-cache")
   resp, err := client.Do(req)
   if err != nil {
-    return errors.New("failed to connect: " + err.Error())
+    err = updateError{
+      s: "error connecting to git server for refs: "+err.Error(),
+      shouldRetry: true,
+    }
+    return handleUpdateError(err, repoPath)
   }
   defer resp.Body.Close()
   
@@ -480,51 +496,6 @@ func doUpdateRepoRefs(repoPath string, forceFull bool) error {
     return err
   }
   
-  // // Figure out which commit hashes are new, and which are old.
-  // var newHashes [][hashLen]byte
-  // var oldHashes [][hashLen]byte
-  // newHashMap := make(map[[hashLen]byte]bool)
-  // oldHashMap := make(map[[hashLen]byte]bool)
-  
-  // // Do we need to download everything anyway?
-  // // (This could happen when we failed to fetch an external delta base in an
-  // // earlier update)
-  // if forceFull == true {
-  //   for _, hash := range refs {
-  //     newHashMap[sliceToHashArray(hash)] = true
-  //   }
-  // } else {
-  //   // Start with the old ones, as we know we have them.
-  //   for _, hash := range oldRefs {
-  //     oldHashMap[sliceToHashArray(hash)] = true
-  //   }
-  //   for hash, _ := range oldHashMap {
-  //     oldHashes = append(oldHashes, hash)
-  //   }
-  //   // Then see which ones are newly referenced.
-  //   for _, hash := range newRefDiffs.NewRefs {
-  //     newHashMap[sliceToHashArray(hash)] = true
-  //   }
-  //   for _, hash := range newRefDiffs.ChangedRefs {
-  //     newHashMap[sliceToHashArray(hash)] = true
-  //   }
-  // }
-  // for hash, _ := range newHashMap {
-  //   // Call the hash new only if we didn't just say we have it.
-  //   // This could happen if, for example, a new tag were created for the current
-  //   // master HEAD commit.
-  //   _, ok := oldHashMap[hash]
-  //   if !ok {
-  //     newHashes = append(newHashes, hash)
-  //   }
-  // }
-  
-  // fmt.Printf("%d new hashes to fetch, %d old hashes to reference. Based on %d\n",
-  //   len(newHashes), len(oldHashes), newRefDiffs.From)
-  
-  // fmt.Printf("%d base commits, %d commits to request from %s\n",
-  //   len(oldHashes), len(newHashes), repoPath)
-  
   // If we have new commits to download, do that.
   if true {
     filename, err := DownloadNewCommits(repoPath, newRefDiffs, forceFull)
@@ -557,38 +528,70 @@ fmt.Printf("Wrote file %s.\n", filename)
         return err
       }
     } else {
-      if err == ZeroLengthPackfile {
-        // We didn't get any response from the git server on the other end: this
-        // might happen because we requested an object that no longer exists, or
-        // possibly(?) because we claimed to have an object that no longer
-        // exists. Queue another update of this repo, not using any known
-        // objects.
-        
-        // TODO: Determine whether this can happen when claiming to have unknown
-        // objects. If it does, we'll definitely need to not claim objects from
-        // branches that have been deleted.
-        _, err := r.Db("gitglob").Table("queued_updates").Get(repoPath).
-          Replace(func(row r.Term) interface{} {
-            return r.Branch(row.Eq(nil), map[string]interface{} {
-              "id": repoPath,
-              "queue_time": r.Now(),
-              "oldest_to_grab": r.Now(),
-              "force_full": true,
-            }, row.Merge(map[string]interface{} {
-              "oldest_to_grab": row.Field("oldest_to_grab").Default(r.Now()),
-              "force_full": true,
-            }))
-          }).
-        RunWrite(rSession); if err != nil {
-          panic(err.Error())
-        }
-      } else {
-        panic(err.Error())
-      }
+      return handleUpdateError(err, repoPath)
     }
   }
   
   return nil
+}
+
+func handleUpdateError(err error, repoPath string) error {
+  shouldRetry := false
+  shouldForceFull := false
+  specificErr, ok := err.(updateError); if ok {
+    shouldRetry = specificErr.shouldRetry
+  } else if err == ZeroLengthPackfile {
+    // We didn't get any response from the git server on the other end: this
+    // might happen because we requested an object that no longer exists, or
+    // possibly(?) because we claimed to have an object that no longer
+    // exists. Queue another update of this repo, not using any known
+    // objects.
+    
+    // TODO: Determine whether this can happen when claiming to have unknown
+    // objects. If it does, we'll definitely need to not claim objects from
+    // branches that have been deleted.
+    shouldRetry = true
+    shouldForceFull = true
+  } else {
+    panic(err.Error())
+  }
+  
+  if shouldRetry {
+    _, rErr := r.Db("gitglob").Table("queued_updates").Get(repoPath).
+      Replace(func(row r.Term) interface{} {
+        if shouldForceFull {
+          return r.Branch(row.Eq(nil), map[string]interface{} {
+            "id": repoPath,
+            "queue_time": r.Now(),
+            "oldest_to_grab": r.Now(),
+            "force_full": shouldForceFull,
+          }, row.Merge(map[string]interface{} {
+            "oldest_to_grab": row.Field("oldest_to_grab").Default(r.Now()),
+            "force_full": true,
+          }))
+        } else {
+          return r.Branch(row.Eq(nil), map[string]interface{} {
+            "id": repoPath,
+            "queue_time": r.Now(),
+            "oldest_to_grab": r.Now(),
+            "force_full": shouldForceFull,
+          }, row.Merge(map[string]interface{} {
+            "oldest_to_grab": row.Field("oldest_to_grab").Default(r.Now()),
+            "force_full": row.Field("force_full").Default(false),
+          }))
+        }
+      }).
+    RunWrite(rSession); if rErr != nil {
+      panic(rErr.Error())
+    }
+    
+    fmt.Println("Update error: '"+err.Error()+"', pausing a second.")
+    time.Sleep(time.Second)
+    
+    return nil
+  } else {
+    return err
+  }
 }
 
 func readPackQueueLoop() {
@@ -784,6 +787,13 @@ func main() {
   //   panic(err.Error())
   // }
   // return
+  
+  // if true {
+  //   err = doUpdateRepoRefs("http://localhost:12345/foo/bar.git", true); if err != nil {
+  //     fmt.Printf("%+v\n", err)
+  //   }
+  //   return
+  // }
   
   if just_pack != "" {
     packfileContents, err := ioutil.ReadFile(just_pack); if err != nil {
