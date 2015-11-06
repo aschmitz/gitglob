@@ -57,6 +57,7 @@ var ZeroLengthPackfile = errors.New("zero length packfile")
 
 type updateError struct {
   s string
+  errorName string
   shouldRetry bool
 }
 func (e updateError) Error() string {
@@ -325,6 +326,7 @@ fmt.Println(string(request))
   if err != nil {
     return "", updateError{
       s: "error connecting to git server for pack: "+err.Error(),
+      errorName: "connect_pack",
       shouldRetry: true,
     }
   }
@@ -458,6 +460,7 @@ func doUpdateRepoRefs(repoPath string, forceFull bool) error {
   if err != nil {
     err = updateError{
       s: "error connecting to git server for refs: "+err.Error(),
+      errorName: "connect_refs",
       shouldRetry: true,
     }
     return handleUpdateError(err, repoPath)
@@ -538,6 +541,7 @@ fmt.Printf("Wrote file %s.\n", filename)
 func handleUpdateError(err error, repoPath string) error {
   shouldRetry := false
   shouldForceFull := false
+  errorName := "unknown"
   specificErr, ok := err.(updateError); if ok {
     shouldRetry = specificErr.shouldRetry
   } else if err == ZeroLengthPackfile {
@@ -552,9 +556,17 @@ func handleUpdateError(err error, repoPath string) error {
     // branches that have been deleted.
     shouldRetry = true
     shouldForceFull = true
+    errorName = "empty_packfile"
   } else {
     panic(err.Error())
   }
+  
+  influxWritePoint("errors", map[string]string{
+    "class": "update",
+    "name": errorName,
+  }, map[string]interface{}{
+    "value": 1,
+  })
   
   if shouldRetry {
     _, rErr := r.Db("gitglob").Table("queued_updates").Get(repoPath).
