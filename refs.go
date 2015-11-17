@@ -199,6 +199,9 @@ func CalcRefDiffs(oldRefs, newRefs map[string][]byte,
       } else {
         // The hashes are different, store this as a changed ref.
         diffs.ChangedRefs[newRef] = newHash
+        
+        // And note that we had the old hash from this ref.
+        oldHashMap[sliceToHashArray(oldHash)] = true
       }
     } else {
       // This didn't exist in the old set: it must be new.
