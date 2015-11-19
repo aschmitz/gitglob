@@ -17,6 +17,7 @@ import (
   "syscall"
   "runtime"
 // "runtime/pprof"
+  "sort"
   "strings"
   "time"
   
@@ -214,20 +215,48 @@ func readCapsLine(capString string) map[string]string {
   return capabilities
 }
 
-func HaveCommit(commithash [hashLen]byte) (bool, error) {
+func HaveCommit(commithash [hashLen]byte) (bool, globpack.GlobpackObjLoc, error) {
   objloc, err := globpack.LookupObjLocation(commithash); if err != nil {
-    return false, err
+    return false, globpack.GlobpackObjLoc{}, err
   }
   
-  return objloc.Existed, nil
+  return objloc.Existed, *objloc, nil
 }
+
+type CommitSortObj struct {
+  Filenum uint64
+  Position uint64
+  Commithash [hashLen]byte
+}
+type CommitSortList []CommitSortObj
+
+func (cl CommitSortList) Len() int { return len(cl) }
+func (cl CommitSortList) Less(i, j int) bool {
+  // Did commit i probably come before commit j?
+  filenumI := cl[i].Filenum
+  filenumJ := cl[j].Filenum
+  if filenumI < filenumJ {
+    // Yes, probably.
+    return true
+  } else {
+    // Did they come from the same file?
+    if filenumI == filenumJ {
+      // Yes, sort by the position in the file.
+      return cl[i].Position < cl[j].Position
+    } else {
+      // No, so j was probably earlier.
+      return false
+    }
+  }
+}
+func (cl CommitSortList) Swap(i, j int){ cl[i], cl[j] = cl[j], cl[i] }
 
 func DownloadNewCommits(repoPath string, diffs refDiffs,
     forceFull bool) (string, error) {
   fmt.Println("Considering", len(diffs.NewHashes)+len(diffs.OldHashes),
     "commit(s)")
   
-  haveHashMap := make(map[[hashLen]byte]bool)
+  haveHashMap := make(map[[hashLen]byte]globpack.GlobpackObjLoc)
   wantHashMap := make(map[[hashLen]byte]bool)
   var lastWanted [hashLen]byte
   
@@ -240,12 +269,12 @@ func DownloadNewCommits(repoPath string, diffs refDiffs,
   } else {
     // We should actually check which hashes we already have.
     for _, hash := range diffs.OldHashes {
-      exists, err := HaveCommit(hash); if err != nil {
+      exists, objLoc, err := HaveCommit(hash); if err != nil {
         return "", err
       }
       
       if exists {
-        haveHashMap[hash] = true
+        haveHashMap[hash] = objLoc
       }
     }
     for _, hash := range diffs.NewHashes {
@@ -253,13 +282,13 @@ func DownloadNewCommits(repoPath string, diffs refDiffs,
       if !ok {
         // We either didn't check this object or we didn't have it. Check to see
         // if we do have it.
-        exists, err := HaveCommit(hash); if err != nil {
+        exists, objLoc, err := HaveCommit(hash); if err != nil {
           return "", err
         }
         
         if exists {
           // We have the object already, so say we have it and don't request it.
-          haveHashMap[hash] = true
+          haveHashMap[hash] = objLoc
         } else {
           // We don't have the object and it was advertised, so request it.
           wantHashMap[hash] = true
@@ -303,9 +332,22 @@ func DownloadNewCommits(repoPath string, diffs refDiffs,
   nextLine, err := BuildPktLine(nil)
   request = append(request, nextLine...)
   
-  for commithash, _ := range haveHashMap {
+  // Get a sorted list of hashes.
+  haveList := make(CommitSortList, len(haveHashMap))
+  haveListIndex := 0
+  for commithash, objLoc := range haveHashMap {
+    haveList[haveListIndex] = CommitSortObj{
+      objLoc.Filenum,
+      objLoc.Position,
+      commithash,
+    }
+    haveListIndex++
+  }
+  sort.Sort(sort.Reverse(haveList))
+  
+  for _, cso := range haveList {
     nextLine, err := BuildPktLine([]byte("have "+
-      hex.EncodeToString(commithash[:])+"\n")); if err != nil {
+      hex.EncodeToString(cso.Commithash[:])+"\n")); if err != nil {
       return "", err
     }
     request = append(request, nextLine...)

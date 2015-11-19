@@ -42,18 +42,18 @@ type globpackWriteData struct {
   Hash [hashLen]byte  // The hash of the object to be inserted
   GlobpackData []byte // The data that should be written to the globpack
   // A channel to write to for indicating the write is done
-  AckChan chan<- *globpackObjLoc
+  AckChan chan<- *GlobpackObjLoc
 }
 
 type globpackWriteRecord struct {
-  Ack *globpackObjLoc
-  Channel chan<- *globpackObjLoc
+  Ack *GlobpackObjLoc
+  Channel chan<- *GlobpackObjLoc
 }
 
 type globpackWriteRequest struct {
   Object *gitObject // The gitObject to write
   // A channel to write to for indicating the write is done
-  AckChan chan<- *globpackObjLoc
+  AckChan chan<- *GlobpackObjLoc
 }
 
 type globpack struct {
@@ -70,7 +70,7 @@ var haveCurrentGlobpack = false
 var currentGlobpack *globpack
 var compressChan chan *globpackWriteRequest
 var writeChan chan *globpackWriteData
-var writerLookupChan chan *globpackObjLoc
+var writerLookupChan chan *GlobpackObjLoc
 var writerMutex sync.Mutex
 var redisConn redis.Conn
 
@@ -309,7 +309,7 @@ func initGlobpackWriter() error {
   
   if writeChan == nil {
     writeChan = make(chan *globpackWriteData, writeChanBuffer)
-    writerLookupChan = make(chan *globpackObjLoc, writerLookupChanBuffer)
+    writerLookupChan = make(chan *GlobpackObjLoc, writerLookupChanBuffer)
     compressChan = make(chan *globpackWriteRequest, writerLookupChanBuffer)
     go objectExistenceHandler()
     go writer((<-chan *globpackWriteData)(writeChan))
@@ -590,7 +590,7 @@ func writer(writes <-chan *globpackWriteData) {
     }
     
     buf = objBuf
-    ack := globpackObjLoc{
+    ack := GlobpackObjLoc{
       Filename: currentGlobpack.Filename,
       Filenum: currentGlobpack.Filenum,
       Position: currentGlobpack.Length,
@@ -627,7 +627,7 @@ func writer(writes <-chan *globpackWriteData) {
         }
         
         buf = append(buf, objBuf...)
-        ack := globpackObjLoc{
+        ack := GlobpackObjLoc{
           Filename: currentGlobpack.Filename,
           Filenum: currentGlobpack.Filenum,
           Position: currentGlobpack.Length,

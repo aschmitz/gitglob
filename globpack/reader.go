@@ -34,7 +34,7 @@ var globpackReaderStats *globpackReaderStatsType
 type globpackLookupRequest struct {
   Hash [hashLen]byte // The hash to look up
   // A channel to write to for the response
-  ResChan chan<- *globpackObjLoc
+  ResChan chan<- *GlobpackObjLoc
   Context interface{} // Will be returned with the response
 }
 
@@ -84,8 +84,8 @@ func globpackReaderStatsReporter() {
   }
 }
 
-func LookupObjLocation(id [hashLen]byte) (*globpackObjLoc, error) {
-  resChan := make(chan *globpackObjLoc)
+func LookupObjLocation(id [hashLen]byte) (*GlobpackObjLoc, error) {
+  resChan := make(chan *GlobpackObjLoc)
   lookupReq := globpackLookupRequest{
     Hash: id,
     ResChan: resChan,
@@ -133,7 +133,7 @@ func lookupWatcher(lookups <-chan *globpackLookupRequest) {
         redisVal := lookupRes.([]byte)
         existedCount += 1
         filenum := binary.LittleEndian.Uint64(redisVal[0:8])
-        locObj := globpackObjLoc {
+        locObj := GlobpackObjLoc {
           Filename: FilenumToFilename(filenum),
           Filenum: filenum,
           Position: binary.LittleEndian.Uint64(redisVal[8:16]),
@@ -143,7 +143,7 @@ func lookupWatcher(lookups <-chan *globpackLookupRequest) {
         locObj.Context = lookupBuf[index].Context
         lookupBuf[index].ResChan <- &locObj
       } else {
-        locObj := globpackObjLoc {
+        locObj := GlobpackObjLoc {
           Existed: false,
           Context: lookupBuf[index].Context,
         }

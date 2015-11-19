@@ -66,7 +66,7 @@ type gitPackfile struct {
   DescendedFrom map[[hashLen]byte][]*gitObject
 }
 
-type globpackObjLoc struct {
+type GlobpackObjLoc struct {
   Filename string     // The filename this object was written to
   Filenum uint64      // The number from the file this object was written to
   Position uint64     // The byte in the file this object starts on
@@ -522,7 +522,7 @@ func ApplyDelta(sourceObj *gitObject, destObj *gitObject) error {
 }
 
 func resolvePackfileObjectsFromBase(packfile *gitPackfile, base *gitObject,
-  ackChan chan *globpackObjLoc) error {
+  ackChan chan *GlobpackObjLoc) error {
   for _, obj := range packfile.DescendedFrom[base.Hash] {
     obj.DecompressIfNecessary()
     
@@ -567,7 +567,7 @@ func LoadPackfile(packfile []byte, repoPath string) error {
   fmt.Printf("Packfile length: %d\n", len(packfile))
   fmt.Printf("Packfile has %d objects.\n", numObjects)
   
-  ackChan := make(chan *globpackObjLoc, 1024)
+  ackChan := make(chan *GlobpackObjLoc, 1024)
   doneChan := make(chan bool)
   go func(writeAcksExpected int) {
     for i := 0; i < writeAcksExpected; i++ {
