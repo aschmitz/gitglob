@@ -599,6 +599,31 @@ func handleUpdateError(err error, repoPath string) error {
     shouldRetry = true
     shouldForceFull = true
     errorName = "empty_packfile"
+  } else if err == globpack.BadPackfileChecksumError {
+    // We received a packfile with a bad checksum. This probably happened for
+    // one of two reasons:
+    // 1: The connection dropped before we received the full packfile. This is
+    //    a clear case where retrying is fine.
+    // 2: The server failed when reading the packfile. We assume this happens
+    //    when the repo is being updated, but it's difficult to tell.
+    
+    // A log from the second case:
+    // Stdout from git server: fatal: unable to read \
+    // 66b5a57133282e153bc4b3436c0f9a246edc121a
+    // Error from git server: aborting due to possible repository corruption \
+    // on the remote side.
+    // Pack length: 103841792
+    // panic: bad packfile checksum
+    
+    // In the second case, it's *possible* that this is not a transient error,
+    // so perhaps we should have some backoff here and eventually assume the
+    // repository has been corrupted. If this ever occurs, we'll need to handle
+    // it with more grace than we do now.
+    
+    // For now, just assume an immediate retry of the exact same thing is fine.
+    shouldRetry = true
+    shouldForceFull = false
+    errorName = "bad_checksum"
   } else {
     panic(err.Error())
   }
