@@ -597,7 +597,9 @@ func handleUpdateError(err error, repoPath string) error {
     // objects. If it does, we'll definitely need to not claim objects from
     // branches that have been deleted.
     shouldRetry = true
-    shouldForceFull = true
+    // shouldForceFull = true
+    // Just basing our next pull on up-to-date refs should work
+    shouldForceFull = false
     errorName = "empty_packfile"
   } else if err == globpack.BadPackfileChecksumError {
     // We received a packfile with a bad checksum. This probably happened for
