@@ -690,10 +690,14 @@ func readPackQueueLoop() {
           r.Error("Queue entry is taken.")), r.UpdateOpts {
             ReturnChanges: true,
           }).RunWrite(rSession)
+    noWork := true
     if err != nil {
-      panic(err.Error())
+      fmt.Println("Error checking for work: %s\n", err.Error())
+    } else if len(res.Changes) > 0 {
+      noWork = false
     }
-    if len(res.Changes) != 1 {
+    
+    if noWork {
       fmt.Println("No packs to load.\n")
       time.Sleep(time.Second)
     } else {
@@ -763,10 +767,14 @@ func readUpdateQueueLoop() {
           r.Error("Queue entry is taken.")), r.ReplaceOpts {
             ReturnChanges: true,
           }).RunWrite(rSession)
+    noWork := true
     if err != nil {
-      panic(err.Error())
+      fmt.Println("Error checking for work: %s\n", err.Error())
+    } else if len(res.Changes) > 0 {
+      noWork = false
     }
-    if len(res.Changes) != 1 {
+    
+    if noWork {
       fmt.Println("No repos to check.\n")
       time.Sleep(time.Second)
     } else {
