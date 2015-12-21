@@ -549,7 +549,7 @@ func doUpdateRepoRefs(repoPath string, forceFull bool) error {
       // filename may be blank if for some reason we already had all of these
       // commits.
       if filename != "" {
-        _, err = r.Db("gitglob").Table("queued_packs").Insert(
+        _, err = r.DB("gitglob").Table("queued_packs").Insert(
           map[string]interface{} {
             "id": filename,
             "repo_path": repoPath,
@@ -562,7 +562,7 @@ fmt.Printf("Wrote file %s.\n", filename)
       }
       
       // Save the list of refs as the latest one.
-      _, err = r.Db("gitglob").Table("refs_latest").Get(repoPath).Replace(
+      _, err = r.DB("gitglob").Table("refs_latest").Get(repoPath).Replace(
         map[string]interface{} {
           "id": repoPath,
           "refs": refs,
@@ -638,7 +638,7 @@ func handleUpdateError(err error, repoPath string) error {
   })
   
   if shouldRetry {
-    _, rErr := r.Db("gitglob").Table("queued_updates").Get(repoPath).
+    _, rErr := r.DB("gitglob").Table("queued_updates").Get(repoPath).
       Replace(func(row r.Term) interface{} {
         if shouldForceFull {
           return r.Branch(row.Eq(nil), map[string]interface{} {
@@ -678,7 +678,7 @@ func handleUpdateError(err error, repoPath string) error {
 func readPackQueueLoop() {
     for {
     // Fetch the oldest queue entry and mark it as being in progress.
-    res, err := r.Db("gitglob").Table("queued_packs").Filter(
+    res, err := r.DB("gitglob").Table("queued_packs").Filter(
       r.Row.Field("in_progress").Default(false).Eq(false)).
         OrderBy("queue_time").
         Limit(1).
@@ -711,7 +711,7 @@ fmt.Printf("Will read: %+v\n", packFullPath)
       }
       err = globpack.LoadPackfile(packfileContents, repoPath); if err != nil {
         if err == globpack.CouldntResolveExternalDeltasError {
-          _, err := r.Db("gitglob").Table("queued_updates").Get(repoPath).
+          _, err := r.DB("gitglob").Table("queued_updates").Get(repoPath).
             Replace(func(row r.Term) interface{} {
               return r.Branch(row.Eq(nil), map[string]interface{} {
                 "id": repoPath,
@@ -737,7 +737,7 @@ fmt.Printf("Will read: %+v\n", packFullPath)
       }
       
       // Delete the pack from the list of packs that need to be read.
-      res, err = r.Db("gitglob").Table("queued_packs").Get(packDetails["id"]).
+      res, err = r.DB("gitglob").Table("queued_packs").Get(packDetails["id"]).
         Delete().RunWrite(rSession)
       if err != nil {
         panic(err.Error())
@@ -751,7 +751,7 @@ func readUpdateQueueLoop() {
   
   for {
     // Fetch the oldest queue entry and mark it as being in progress.
-    res, err := r.Db("gitglob").Table("queued_updates").Filter(
+    res, err := r.DB("gitglob").Table("queued_updates").Filter(
       r.Row.Field("in_progress").Default(false).Eq(false)).
         OrderBy("queue_time").
         Limit(1).
@@ -785,7 +785,7 @@ fmt.Printf("Will update: %+v\n", repoPath)
       
       // Update the row: remove it if there isn't already a new update queued,
       //  or mark it not in progress if there is.
-      res, err = r.Db("gitglob").Table("queued_updates").Get(repoPath).Replace(
+      res, err = r.DB("gitglob").Table("queued_updates").Get(repoPath).Replace(
         func(row r.Term) interface{} {
           return r.Branch(row.Field("oldest_to_grab").Default(nil).Eq(nil),
           nil,

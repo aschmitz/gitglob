@@ -235,11 +235,11 @@ func RecordRepoRefs(repoPath string, timestamp time.Time,
   oldRefs := make(map[string][]byte)
   
   // Set these as the latest revisions in the database.
-  res, err := r.Db("gitglob").Table("refs_latest").Get(repoPath).Run(rSession)
+  res, err := r.DB("gitglob").Table("refs_latest").Get(repoPath).Run(rSession)
   if err != nil {
     return diffs, oldRefs, err
   }
-  // res, err := r.Db("gitglob").Table("refs_latest").Get(repoPath).Replace(
+  // res, err := r.DB("gitglob").Table("refs_latest").Get(repoPath).Replace(
   //   r.Branch(r.Row, r.Row, map[string]interface{}{"id": repoPath}).
   //   Without("refs").Merge(func (row r.Term) interface{} {
   //     return map[string]interface{}{
@@ -317,7 +317,7 @@ func RecordRepoRefs(repoPath string, timestamp time.Time,
   
   // Write the diffs to the database
   refStamp := timestamp.Unix()
-  _, err = r.Db("gitglob").Table("refs_history").Insert(
+  _, err = r.DB("gitglob").Table("refs_history").Insert(
     map[string]interface{}{
       "addr": repoPath,
       "refStamp": refStamp,
