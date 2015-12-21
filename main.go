@@ -692,7 +692,7 @@ func readPackQueueLoop() {
           }).RunWrite(rSession)
     noWork := true
     if err != nil {
-      fmt.Println("Error checking for work: %s\n", err.Error())
+      fmt.Println("Error checking for work:", err.Error())
     } else if len(res.Changes) > 0 {
       noWork = false
     }
@@ -769,7 +769,7 @@ func readUpdateQueueLoop() {
           }).RunWrite(rSession)
     noWork := true
     if err != nil {
-      fmt.Println("Error checking for work: %s\n", err.Error())
+      fmt.Println("Error checking for work:", err.Error())
     } else if len(res.Changes) > 0 {
       noWork = false
     }
