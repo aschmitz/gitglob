@@ -378,6 +378,7 @@ fmt.Println(string(request))
       "application/x-git-upload-pack-result" {
     body, _ := ioutil.ReadAll(resp.Body)
     fmt.Println("Body:", body)
+    fmt.Println("Status code: ", resp.StatusCode)
     panic("Unexpected Content-Type: "+resp.Header["Content-Type"][0])
   }
   
@@ -515,6 +516,7 @@ func doUpdateRepoRefs(repoPath string, forceFull bool) error {
       "application/x-git-upload-pack-advertisement" {
     body, _ := ioutil.ReadAll(resp.Body)
     fmt.Println("Body:", body)
+    fmt.Println("Status code: ", resp.StatusCode)
     return errors.New("Unexpected Content-Type: "+
       resp.Header["Content-Type"][0])
   }
