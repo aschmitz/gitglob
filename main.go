@@ -513,6 +513,8 @@ func doUpdateRepoRefs(repoPath string, forceFull bool) error {
   
   if resp.Header["Content-Type"][0] !=
       "application/x-git-upload-pack-advertisement" {
+    body, _ := ioutil.ReadAll(resp.Body)
+    fmt.Println("Body:", body)
     return errors.New("Unexpected Content-Type: "+
       resp.Header["Content-Type"][0])
   }
