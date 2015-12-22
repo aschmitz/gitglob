@@ -376,6 +376,8 @@ fmt.Println(string(request))
   
   if resp.Header["Content-Type"][0] !=
       "application/x-git-upload-pack-result" {
+    body, err := ioutil.ReadAll(resp.Body)
+    fmt.Println("Body:", body)
     panic("Unexpected Content-Type: "+resp.Header["Content-Type"][0])
   }
   
