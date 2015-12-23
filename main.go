@@ -16,6 +16,7 @@ import (
   "os/signal"
   "syscall"
   "runtime"
+  "runtime/debug"
 // "runtime/pprof"
   "sort"
   "strings"
@@ -94,6 +95,13 @@ func influxWritePoint(measurement string, tags map[string]string,
       // panic(err.Error())
     }
   }
+}
+
+// Occasionally, we want to free memory we've taken up. This can lead to better
+// behavior when running multiple copies of gitglob at the same time.
+func forceGC() {
+  runtime.GC()
+  debug.FreeOSMemory()
 }
 
 func BuildPktLine(line []byte) ([]byte, error) {
@@ -740,6 +748,7 @@ fmt.Printf("Will read: %+v\n", packFullPath)
           panic(err.Error())
         }
       }
+      forceGC()
       
       // Delete the pack from disk.
       err = os.Remove(packFullPath); if err != nil {
@@ -796,6 +805,7 @@ fmt.Printf("Will update: %+v\n", repoPath)
       err = doUpdateRepoRefs(repoPath, forceFull); if err != nil {
         panic(err.Error())
       }
+      forceGC()
       
       // Update the row: remove it if there isn't already a new update queued,
       //  or mark it not in progress if there is.
