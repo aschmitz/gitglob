@@ -21,7 +21,7 @@ import (
   "strings"
   "time"
   
-  "gitlab.lardbucket.org/aschmitz/gitglob/globpack"
+  "github.com/aschmitz/gitglob/globpack"
   influxdb "github.com/influxdb/influxdb/client"
   r "github.com/dancannon/gorethink"
 )

@@ -14,7 +14,7 @@ import (
   "strconv"
   "sync/atomic"
   
-  "gitlab.lardbucket.org/aschmitz/gitglob/debugging/flate"
+  "github.com/aschmitz/gitglob/debugging/flate"
   "github.com/garyburd/redigo/redis"
 )
 

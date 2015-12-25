@@ -15,7 +15,7 @@ import (
   "sync"
   "sync/atomic"
   
-  "gitlab.lardbucket.org/aschmitz/gitglob/debugging/flate"
+  "github.com/aschmitz/gitglob/debugging/flate"
   r "github.com/dancannon/gorethink"
   "github.com/garyburd/redigo/redis"
 )

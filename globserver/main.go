@@ -8,7 +8,7 @@ import (
   "strings"
   "runtime"
   
-  "gitlab.lardbucket.org/aschmitz/gitglob/globpack"
+  "github.com/aschmitz/gitglob/globpack"
   r "github.com/dancannon/gorethink"
 )
 

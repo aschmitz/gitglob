@@ -1,4 +1,9 @@
 todo:
+  Evaluate go 1.7's flate library for fix
+  Handle missing external refs (full pull, "TODO mark repo as iffy")
+  Determine what happens on renamed repos, figure out what to do internally
+  Detect deleted repos
+  Handle DMCA'd repos
   Don't die on repeated influxdb errors?
   Consider tagging influxdb writes with operation type (pack, update)
   Don't log object writes for update queue: they won't happen

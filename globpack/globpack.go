@@ -2,8 +2,8 @@ package globpack
 
 import (
   "bytes"
-  "gitlab.lardbucket.org/aschmitz/gitglob/debugging/flate"
-  "gitlab.lardbucket.org/aschmitz/gitglob/debugging/zlib"
+  "github.com/aschmitz/gitglob/debugging/flate"
+  "github.com/aschmitz/gitglob/debugging/zlib"
   "crypto/sha1"
   "encoding/binary"
 // "encoding/hex"
