@@ -1,0 +1,33 @@
+Setup:
+
+* Code assumes that RethinkDB and InfluxDB are running on localhost, and exposed
+  via their default ports.
+* All output data (including temporary-ish files) are stored in the "output"
+  subdirectory of the current working directory when run.
+* Refernces to debugging/zlib can be replaced as references to "compress/zlib"
+  from the Go standard library, similarly with debugging/flate and
+  "compress/flate". A bug can be fixed by commenting out the "if max == 0 {"
+  block in "(h *huffmanDecoder) init(bits []int) bool".
+
+mkdir -p output/gitpack
+mkdir -p output/globpack
+mkdir -p output/refpack
+
+Make the following RethinkDB tables in the "gitglob" database
+queued_packs
+queued_updates
+objects
+refs_latest
+refs_history
+
+
+To run:
+go build .
+./gitglob -queue=update
+./gitglob -queue=pack
+
+Run the two separate gitglob instances in parallel. You can add additional
+instances if you want, this should allow additional processing in some cases.
+There are still a few noisily crashing bugs yet, so you may have to restart
+the processes in some cases.
+
