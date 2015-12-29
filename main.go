@@ -568,6 +568,8 @@ func doUpdateRepoRefs(repoPath string, forceFull bool) error {
             "id": filename,
             "repo_path": repoPath,
             "queue_time": r.Now(),
+          }, r.InsertOpts {
+            Conflict: "update",
           }).RunWrite(rSession)
         if err != nil {
           return err
