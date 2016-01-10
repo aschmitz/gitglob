@@ -697,11 +697,15 @@ func handleUpdateError(err error, repoId int, repoPath string) error {
   
   if shouldRetry {
     if shouldForceFull {
-      _, err = dbConn.Query(queueRepoUpdateForceFull, repoId); if err != nil {
+      rows, err := dbConn.Query(queueRepoUpdateForceFull, repoId)
+      rows.Close()
+      if err != nil {
         panic(err.Error())
       }
     } else {
-      _, err = dbConn.Query(queueRepoUpdate, repoId); if err != nil {
+      rows, err := dbConn.Query(queueRepoUpdate, repoId)
+      rows.Close()
+      if err != nil {
         panic(err.Error())
       }
     }
@@ -756,7 +760,8 @@ fmt.Printf("Will read: %+v\n", packFullPath)
       }
       err = globpack.LoadPackfile(packfileContents, repoPath); if err != nil {
         if err == globpack.CouldntResolveExternalDeltasError {
-          _, err = dbConn.Query(queueRepoUpdateForceFull, repoId)
+          rows, err := dbConn.Query(queueRepoUpdateForceFull, repoId)
+          rows.Close()
           if err != nil {
             panic(err.Error())
           }
@@ -807,7 +812,9 @@ fmt.Printf("Will update: %+v\n", repoPath)
     
     // Update the row: remove it if there isn't already a new update queued,
     //  or mark it not in progress if there is.
-    _, err = dbConn.Query(markRepoUpdatedQuery, repoId); if err != nil {
+    rows, err := dbConn.Query(markRepoUpdatedQuery, repoId)
+    rows.Close()
+    if err != nil {
       panic(err.Error())
     }
   }
