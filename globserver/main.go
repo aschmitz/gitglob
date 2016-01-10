@@ -19,7 +19,7 @@ const (
 var rSession *r.Session
 
 func writeInfoRefs(repoPath string, w http.ResponseWriter, req *http.Request) {
-  res, err := r.Db("gitglob").Table("refs_latest").Get(repoPath).Run(rSession)
+  res, err := r.DB("gitglob").Table("refs_latest").Get(repoPath).Run(rSession)
   if err != nil {
     http.Error(w, "500 refs lookup error", http.StatusInternalServerError)
     return

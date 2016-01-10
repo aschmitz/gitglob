@@ -18,6 +18,7 @@ import (
   "os/signal"
   "syscall"
   "runtime"
+  "runtime/debug"
 // "runtime/pprof"
   "sort"
   "strings"
@@ -135,6 +136,13 @@ func influxWritePoint(measurement string, tags map[string]string,
       // panic(err.Error())
     }
   }
+}
+
+// Occasionally, we want to free memory we've taken up. This can lead to better
+// behavior when running multiple copies of gitglob at the same time.
+func forceGC() {
+  runtime.GC()
+  debug.FreeOSMemory()
 }
 
 func BuildPktLine(line []byte) ([]byte, error) {
@@ -417,6 +425,9 @@ fmt.Println(string(request))
   
   if resp.Header["Content-Type"][0] !=
       "application/x-git-upload-pack-result" {
+    body, _ := ioutil.ReadAll(resp.Body)
+    fmt.Println("Body:", body)
+    fmt.Println("Status code: ", resp.StatusCode)
     panic("Unexpected Content-Type: "+resp.Header["Content-Type"][0])
   }
   
@@ -552,6 +563,9 @@ func doUpdateRepoRefs(repoId int, repoPath string, forceFull bool) error {
   
   if resp.Header["Content-Type"][0] !=
       "application/x-git-upload-pack-advertisement" {
+    body, _ := ioutil.ReadAll(resp.Body)
+    fmt.Println("Body:", body)
+    fmt.Println("Status code: ", resp.StatusCode)
     return errors.New("Unexpected Content-Type: "+
       resp.Header["Content-Type"][0])
   }
@@ -590,12 +604,14 @@ func doUpdateRepoRefs(repoId int, repoPath string, forceFull bool) error {
       // filename may be blank if for some reason we already had all of these
       // commits.
       if filename != "" {
-        _, err = r.Db("gitglob").Table("queued_packs").Insert(
+        _, err = r.DB("gitglob").Table("queued_packs").Insert(
           map[string]interface{} {
             "id": filename,
             "repo_path": repoPath,
             "repo_id": repoId,
             "queue_time": r.Now(),
+          }, r.InsertOpts {
+            Conflict: "update",
           }).RunWrite(rSession)
         if err != nil {
           return err
@@ -604,7 +620,7 @@ fmt.Printf("Wrote file %s.\n", filename)
       }
       
       // Save the list of refs as the latest one.
-      _, err = r.Db("gitglob").Table("refs_latest").Get(repoPath).Replace(
+      _, err = r.DB("gitglob").Table("refs_latest").Get(repoPath).Replace(
         map[string]interface{} {
           "id": repoPath,
           "refs": refs,
@@ -702,7 +718,7 @@ func handleUpdateError(err error, repoId int, repoPath string) error {
 func readPackQueueLoop() {
     for {
     // Fetch the oldest queue entry and mark it as being in progress.
-    res, err := r.Db("gitglob").Table("queued_packs").Filter(
+    res, err := r.DB("gitglob").Table("queued_packs").Filter(
       r.Row.Field("in_progress").Default(false).Eq(false)).
         OrderBy("queue_time").
         Limit(1).
@@ -714,10 +730,14 @@ func readPackQueueLoop() {
           r.Error("Queue entry is taken.")), r.UpdateOpts {
             ReturnChanges: true,
           }).RunWrite(rSession)
+    noWork := true
     if err != nil {
-      panic(err.Error())
+      fmt.Println("Error checking for work:", err.Error())
+    } else if len(res.Changes) > 0 {
+      noWork = false
     }
-    if len(res.Changes) != 1 {
+    
+    if noWork {
       fmt.Println("No packs to load.\n")
       time.Sleep(time.Second)
     } else {
@@ -744,6 +764,7 @@ fmt.Printf("Will read: %+v\n", packFullPath)
           panic(err.Error())
         }
       }
+      forceGC()
       
       // Delete the pack from disk.
       err = os.Remove(packFullPath); if err != nil {
@@ -751,7 +772,7 @@ fmt.Printf("Will read: %+v\n", packFullPath)
       }
       
       // Delete the pack from the list of packs that need to be read.
-      res, err = r.Db("gitglob").Table("queued_packs").Get(packDetails["id"]).
+      res, err = r.DB("gitglob").Table("queued_packs").Get(packDetails["id"]).
         Delete().RunWrite(rSession)
       if err != nil {
         panic(err.Error())
@@ -779,9 +800,10 @@ func readUpdateQueueLoop() {
     }
     
 fmt.Printf("Will update: %+v\n", repoPath)
-    // err = doUpdateRepoRefs(repoId, repoPath, forceFull); if err != nil {
-    //   panic(err.Error())
-    // }
+    err = doUpdateRepoRefs(repoId, repoPath, forceFull); if err != nil {
+      panic(err.Error())
+    }
+    forceGC()
     
     // Update the row: remove it if there isn't already a new update queued,
     //  or mark it not in progress if there is.

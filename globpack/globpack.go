@@ -672,11 +672,10 @@ fmt.Printf("Second pass: %d distinct delta bases remain.\n", len(packObj.Descend
       "value": 1,
       "repo_path": repoPath,
     })
-fmt.Printf("Couldn't resolve external refs:\n")
-for baseHash, _ := range packObj.DescendedFrom {
-  fmt.Printf("  %x\n", baseHash)
-}
-panic(CouldntResolveExternalDeltasError)
+    fmt.Printf("Couldn't resolve external refs:\n")
+    for baseHash, _ := range packObj.DescendedFrom {
+      fmt.Printf("  %x\n", baseHash)
+    }
     return CouldntResolveExternalDeltasError
   }
   
