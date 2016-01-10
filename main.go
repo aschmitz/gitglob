@@ -2,8 +2,10 @@ package main
 
 import (
   "bytes"
+  "database/sql"
   "encoding/binary"
   "encoding/hex"
+  "encoding/json"
   "errors"
   "flag"
   "fmt"
@@ -23,10 +25,12 @@ import (
   
   "github.com/aschmitz/gitglob/globpack"
   influxdb "github.com/influxdb/influxdb/client"
+  _ "github.com/lib/pq"
   r "github.com/dancannon/gorethink"
 )
 
 var rSession *r.Session
+var dbConn *sql.DB
 
 const (
   hashLen = 20
@@ -34,7 +38,44 @@ const (
   RefDiffTypeDelta = 2
   maxRefDepth = 100
   storagePath = "output"
+  getNextRepoQuery = `UPDATE repos
+    SET (queue_state, last_download_time) = (2, NOW())
+    FROM (
+      SELECT id, url, force_full FROM repos
+        WHERE queue_state = 1 AND watching = True
+        ORDER BY queue_time ASC LIMIT 1 FOR UPDATE
+    ) found
+    WHERE repos.id = found.id
+    RETURNING found.id, found.url, found.force_full;`
+  
+  // If the most recently queued update was before this download, then we're
+  // done. If not, we need to download this repository again. Set the queue
+  // state accordingly.
+  markRepoUpdatedQuery = `UPDATE repos
+    SET queue_state = (CASE
+        WHEN queue_time < last_download_time THEN 0
+        ELSE 1
+      END)
+    WHERE id = $1`
+  
+  queueRepoUpdate = `UPDATE repos
+    SET (queue_state, queue_time) = ((CASE
+        WHEN queue_state = 0 THEN 1
+        ELSE queue_state
+      END), NOW())
+    WHERE id = $1`
+  
+  queueRepoUpdateForceFull = `UPDATE repos
+    SET (queue_state, queue_time, force_full) = ((CASE
+        WHEN queue_state = 0 THEN 1
+        ELSE queue_state
+      END), NOW(), TRUE)
+    WHERE id = $1`
 )
+
+type GitglobConf struct {
+    DbConnectionString string
+}
 
 type refDiffs struct {
   Type uint8
@@ -491,7 +532,7 @@ func sliceToHashArray(in []byte) [hashLen]byte {
   return out
 }
 
-func doUpdateRepoRefs(repoPath string, forceFull bool) error {
+func doUpdateRepoRefs(repoId int, repoPath string, forceFull bool) error {
   timestamp := time.Now().UTC()
   client := &http.Client{}
   req, err := http.NewRequest("GET", repoPath+
@@ -505,7 +546,7 @@ func doUpdateRepoRefs(repoPath string, forceFull bool) error {
       errorName: "connect_refs",
       shouldRetry: true,
     }
-    return handleUpdateError(err, repoPath)
+    return handleUpdateError(err, repoId, repoPath)
   }
   defer resp.Body.Close()
   
@@ -553,6 +594,7 @@ func doUpdateRepoRefs(repoPath string, forceFull bool) error {
           map[string]interface{} {
             "id": filename,
             "repo_path": repoPath,
+            "repo_id": repoId,
             "queue_time": r.Now(),
           }).RunWrite(rSession)
         if err != nil {
@@ -573,14 +615,14 @@ fmt.Printf("Wrote file %s.\n", filename)
         return err
       }
     } else {
-      return handleUpdateError(err, repoPath)
+      return handleUpdateError(err, repoId, repoPath)
     }
   }
   
   return nil
 }
 
-func handleUpdateError(err error, repoPath string) error {
+func handleUpdateError(err error, repoId int, repoPath string) error {
   shouldRetry := false
   shouldForceFull := false
   errorName := "unknown"
@@ -638,32 +680,14 @@ func handleUpdateError(err error, repoPath string) error {
   })
   
   if shouldRetry {
-    _, rErr := r.Db("gitglob").Table("queued_updates").Get(repoPath).
-      Replace(func(row r.Term) interface{} {
-        if shouldForceFull {
-          return r.Branch(row.Eq(nil), map[string]interface{} {
-            "id": repoPath,
-            "queue_time": r.Now(),
-            "oldest_to_grab": r.Now(),
-            "force_full": shouldForceFull,
-          }, row.Merge(map[string]interface{} {
-            "oldest_to_grab": row.Field("oldest_to_grab").Default(r.Now()),
-            "force_full": true,
-          }))
-        } else {
-          return r.Branch(row.Eq(nil), map[string]interface{} {
-            "id": repoPath,
-            "queue_time": r.Now(),
-            "oldest_to_grab": r.Now(),
-            "force_full": shouldForceFull,
-          }, row.Merge(map[string]interface{} {
-            "oldest_to_grab": row.Field("oldest_to_grab").Default(r.Now()),
-            "force_full": row.Field("force_full").Default(false),
-          }))
-        }
-      }).
-    RunWrite(rSession); if rErr != nil {
-      panic(rErr.Error())
+    if shouldForceFull {
+      _, err = dbConn.Query(queueRepoUpdateForceFull, repoId); if err != nil {
+        panic(err.Error())
+      }
+    } else {
+      _, err = dbConn.Query(queueRepoUpdate, repoId); if err != nil {
+        panic(err.Error())
+      }
     }
     
     fmt.Println("Update error: '"+err.Error()+"', pausing a second.")
@@ -700,6 +724,7 @@ func readPackQueueLoop() {
       packDetails := res.Changes[0].NewValue.(map[string]interface{})
       packFilename := packDetails["id"].(string)
       repoPath := packDetails["repo_path"].(string)
+      repoId := int(packDetails["repo_id"].(float64))
       packFullPath := storagePath+"/gitpack/"+packFilename
       
 fmt.Printf("Will read: %+v\n", packFullPath)
@@ -711,19 +736,8 @@ fmt.Printf("Will read: %+v\n", packFullPath)
       }
       err = globpack.LoadPackfile(packfileContents, repoPath); if err != nil {
         if err == globpack.CouldntResolveExternalDeltasError {
-          _, err := r.Db("gitglob").Table("queued_updates").Get(repoPath).
-            Replace(func(row r.Term) interface{} {
-              return r.Branch(row.Eq(nil), map[string]interface{} {
-                "id": repoPath,
-                "queue_time": r.Now(),
-                "oldest_to_grab": r.Now(),
-                "force_full": true,
-              }, row.Merge(map[string]interface{} {
-                "oldest_to_grab": row.Field("oldest_to_grab").Default(r.Now()),
-                "force_full": true,
-              }))
-            }).
-          RunWrite(rSession); if err != nil {
+          _, err = dbConn.Query(queueRepoUpdateForceFull, repoId)
+          if err != nil {
             panic(err.Error())
           }
         } else {
@@ -748,55 +762,31 @@ fmt.Printf("Will read: %+v\n", packFullPath)
 
 func readUpdateQueueLoop() {
   initRefpackWriting()
+  var repoId int
+  var forceFull bool
+  var repoPath string
   
   for {
     // Fetch the oldest queue entry and mark it as being in progress.
-    res, err := r.Db("gitglob").Table("queued_updates").Filter(
-      r.Row.Field("in_progress").Default(false).Eq(false)).
-        OrderBy("queue_time").
-        Limit(1).
-        Replace(r.Branch(r.Row.Field("in_progress").Default(false).Eq(false),
-          r.Row.Without("oldest_to_grab").Merge(map[string]interface{} {
-            "in_progress": true,
-            "start_time": r.Now(),
-            }),
-          r.Error("Queue entry is taken.")), r.ReplaceOpts {
-            ReturnChanges: true,
-          }).RunWrite(rSession)
-    if err != nil {
+    err := dbConn.QueryRow(getNextRepoQuery).Scan(&repoId, &repoPath,
+      &forceFull)
+    if err == sql.ErrNoRows {
+      fmt.Println("No repos to check:", err.Error())
+      time.Sleep(time.Second)
+      continue
+    } else if err != nil {
       panic(err.Error())
     }
-    if len(res.Changes) != 1 {
-      fmt.Println("No repos to check.\n")
-      time.Sleep(time.Second)
-    } else {
-      repoDetails := res.Changes[0].NewValue.(map[string]interface{})
-      repoPath := repoDetails["id"].(string)
-      
-      forceFull := false
-      if forceVal, ok := repoDetails["force_full"].(bool); ok && forceVal {
-        forceFull = true
-      }
-      
+    
 fmt.Printf("Will update: %+v\n", repoPath)
-      err = doUpdateRepoRefs(repoPath, forceFull); if err != nil {
-        panic(err.Error())
-      }
-      
-      // Update the row: remove it if there isn't already a new update queued,
-      //  or mark it not in progress if there is.
-      res, err = r.Db("gitglob").Table("queued_updates").Get(repoPath).Replace(
-        func(row r.Term) interface{} {
-          return r.Branch(row.Field("oldest_to_grab").Default(nil).Eq(nil),
-          nil,
-          row.Without("in_progress", "start_time").Merge(
-            map[string]interface{} {
-              "queue_time": row.Field("oldest_to_grab"),
-            }))
-        }).RunWrite(rSession)
-      if err != nil {
-        panic(err.Error())
-      }
+    // err = doUpdateRepoRefs(repoId, repoPath, forceFull); if err != nil {
+    //   panic(err.Error())
+    // }
+    
+    // Update the row: remove it if there isn't already a new update queued,
+    //  or mark it not in progress if there is.
+    _, err = dbConn.Query(markRepoUpdatedQuery, repoId); if err != nil {
+      panic(err.Error())
     }
   }
 }
@@ -805,6 +795,27 @@ func main() {
   runtime.GOMAXPROCS(runtime.NumCPU())
   rand.Seed(time.Now().UTC().UnixNano())
   var err error
+  
+  configFile, _ := os.Open("config.json")
+  configDecoder := json.NewDecoder(configFile)
+  config := GitglobConf{}
+  err = configDecoder.Decode(&config)
+  if err != nil {
+    fmt.Println("Error reading configuration:", err)
+    os.Exit(1)
+  }
+  
+  dbConn, err = sql.Open("postgres", config.DbConnectionString)
+  if err != nil {
+    fmt.Println("Error connecting to DB:", err)
+    os.Exit(1)
+  }
+  err = dbConn.Ping()
+  if err != nil {
+    fmt.Println("Error pinging DB:", err)
+    os.Exit(1)
+  }
+  
   rSession, err = r.Connect(r.ConnectOpts{
     Address: "localhost:28015",
     MaxIdle: 100,
@@ -832,16 +843,6 @@ func main() {
   }); if err != nil {
     panic(err.Error())
   }
-  
-  // To queue an update (JS):
-  // var path = 'https://github.com/aschmitz/nepenthes.git';
-  // r.db('gitglob').table('queued_updates').get(path).replace(function(row) {
-  //   return r.branch(row.eq(null), {
-  //     id: path, queue_time: r.now(), oldest_to_grab: r.now()
-  //   }, row.merge({
-  //     oldest_to_grab: row('oldest_to_grab').default(r.now())
-  //   }));
-  // })
   
   var queue string
   var just_pack string
