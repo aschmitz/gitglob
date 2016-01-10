@@ -1,0 +1,3 @@
+{
+  "DbConnectionString": "postgres://user:pass@host/db"
+}
