@@ -12,6 +12,7 @@ import (
   "io"
   "io/ioutil"
   "math/rand"
+  "net"
   "net/http"
   "net/url"
   "os"
@@ -696,7 +697,7 @@ func handleUpdateError(err error, repoId int, repoPath string) error {
         // because of load or blocking, ideally.
         shouldRetry = true
         shouldForceFull = false
-        errorName = 'conn_reset'
+        errorName = "conn_reset"
       default:
         // An unknown network error, so we'll panic.
         panic(err.Error())
