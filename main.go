@@ -685,7 +685,26 @@ func handleUpdateError(err error, repoId int, repoPath string) error {
     shouldForceFull = false
     errorName = "bad_checksum"
   } else {
-    panic(err.Error())
+    // Was this just a network error?
+    operr, ok := err.(*net.OpError)
+    if ok {
+      switch operr.Err.Error() {
+      case syscall.ECONNRESET.Error():
+        // We just had the connection unexpectedly reset. That *generally*
+        // doesn't disqualify us from trying again, but we should make sure
+        // that we don't just hammer sites that are sending connection resets
+        // because of load or blocking, ideally.
+        shouldRetry = true
+        shouldForceFull = false
+        errorName = 'conn_reset'
+      default:
+        // An unknown network error, so we'll panic.
+        panic(err.Error())
+      }
+    } else {
+      // Not a network error, we don't know what's going on.
+      panic(err.Error())
+    }
   }
   
   influxWritePoint("errors", map[string]string{
