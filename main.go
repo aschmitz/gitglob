@@ -55,24 +55,33 @@ const (
   // done. If not, we need to download this repository again. Set the queue
   // state accordingly.
   markRepoUpdatedQuery = `UPDATE repos
-    SET queue_state = (CASE
+    SET (queue_state, error_streak) = ((CASE
         WHEN queue_time < last_download_time THEN 0
         ELSE 1
-      END)
-    WHERE id = $1`
+      END), 0)
+    WHERE id = $1;`
   
-  queueRepoUpdate = `UPDATE repos
+  queueRepoUpdateQuery = `UPDATE repos
     SET (queue_state, queue_time) = ((CASE
         WHEN queue_state = 0 THEN 1
         ELSE queue_state
       END), NOW())
-    WHERE id = $1`
+    WHERE id = $1;`
   
-  queueRepoUpdateForceFull = `UPDATE repos
+  queueRepoUpdateForceFullQuery = `UPDATE repos
     SET (queue_state, queue_time, force_full) = ((CASE
         WHEN queue_state = 0 THEN 1
         ELSE queue_state
       END), NOW(), TRUE)
+    WHERE id = $1;`
+  
+  saveRepoErrorQuery = `UPDATE repos
+    SET (error_streak, last_error) = (error_streak + 1, $2)
+    WHERE id = $1
+    RETURNING error_streak;`
+  
+  disableRepoQuery = `UPDATE repos
+    SET (enabled) = (FALSE)
     WHERE id = $1`
 )
 
@@ -736,6 +745,15 @@ func handleUpdateError(err error, repoId int, repoPath string) error {
     }
   }
   
+  // Note the error in our database
+  var error_streak int
+  err = dbConn.QueryRow(saveRepoErrorQuery, repoId, err.Error()).Scan(
+    &error_streak)
+  if err != nil {
+    panic(err.Error())
+  }
+  
+  // Note the error in InfluxDB
   influxWritePoint("errors", map[string]string{
     "class": "update",
     "name": errorName,
@@ -744,14 +762,15 @@ func handleUpdateError(err error, repoId int, repoPath string) error {
   })
   
   if shouldRetry {
+    // Queue the appropriate retry.
     if shouldForceFull {
-      rows, err := dbConn.Query(queueRepoUpdateForceFull, repoId)
+      rows, err := dbConn.Query(queueRepoUpdateForceFullQuery, repoId)
       rows.Close()
       if err != nil {
         panic(err.Error())
       }
     } else {
-      rows, err := dbConn.Query(queueRepoUpdate, repoId)
+      rows, err := dbConn.Query(queueRepoUpdateQuery, repoId)
       rows.Close()
       if err != nil {
         panic(err.Error())
@@ -763,7 +782,15 @@ func handleUpdateError(err error, repoId int, repoPath string) error {
     
     return nil
   } else {
-    return err
+    // We're not going to bother retrying this repository in the future at
+    // this point, so mark it as disabled.
+    rows, err := dbConn.Query(disableRepoQuery, repoId)
+    rows.Close()
+    if err != nil {
+      panic(err.Error())
+    }
+    
+    return nil
   }
 }
 
@@ -808,7 +835,7 @@ fmt.Printf("Will read: %+v\n", packFullPath)
       }
       err = globpack.LoadPackfile(packfileContents, repoPath); if err != nil {
         if err == globpack.CouldntResolveExternalDeltasError {
-          rows, err := dbConn.Query(queueRepoUpdateForceFull, repoId)
+          rows, err := dbConn.Query(queueRepoUpdateForceFullQuery, repoId)
           rows.Close()
           if err != nil {
             panic(err.Error())
