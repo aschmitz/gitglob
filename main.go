@@ -664,17 +664,17 @@ fmt.Printf("Wrote file %s.\n", filename)
   return nil
 }
 
-func handleUpdateError(err error, repoId int, repoPath string) error {
+func handleUpdateError(upErr error, repoId int, repoPath string) error {
   shouldRetry := false
   shouldForceFull := false
   errorName := "unknown"
-  switch err := err.(type) {
+  switch upErr := upErr.(type) {
   case updateError:
-    shouldRetry = err.shouldRetry
+    shouldRetry = upErr.shouldRetry
   case unexpectedContentTypeError:
     // curl -A "gitglob/0.0.1" -v -X GET \
     // https://github.com/aschmitz/404.git/info/refs?service=git-upload-pack
-    switch err.resp.StatusCode {
+    switch upErr.resp.StatusCode {
     case 401:
       // This is saying we don't have permission to get the repository. That
       // could mean a DMCA request (in which case the body will have more
@@ -682,10 +682,10 @@ func handleUpdateError(err error, repoId int, repoPath string) error {
       // that never existed.
       shouldRetry = false
     default:
-      panic(err)
+      panic(upErr.Error())
     }
   case *net.OpError:
-    switch err.Err.Error() {
+    switch upErr.Err.Error() {
     case syscall.ECONNRESET.Error():
       // We just had the connection unexpectedly reset. That *generally*
       // doesn't disqualify us from trying again, but we should make sure
@@ -696,10 +696,10 @@ func handleUpdateError(err error, repoId int, repoPath string) error {
       errorName = "conn_reset"
     default:
       // An unknown network error, so we'll panic.
-      panic(err.Error())
+      panic(upErr.Error())
     }
   default:
-    if err == ZeroLengthPackfile {
+    if upErr == ZeroLengthPackfile {
       // We didn't get any response from the git server on the other end: this
       // might happen because we requested an object that no longer exists, or
       // possibly(?) because we claimed to have an object that no longer
@@ -714,7 +714,7 @@ func handleUpdateError(err error, repoId int, repoPath string) error {
       // Just basing our next pull on up-to-date refs should work
       shouldForceFull = false
       errorName = "empty_packfile"
-    } else if err == globpack.BadPackfileChecksumError {
+    } else if upErr == globpack.BadPackfileChecksumError {
       // We received a packfile with a bad checksum. This probably happened for
       // one of two reasons:
       // 1: The connection dropped before we received the full packfile. This
@@ -741,13 +741,13 @@ func handleUpdateError(err error, repoId int, repoPath string) error {
       shouldForceFull = false
       errorName = "bad_checksum"
     } else {
-      panic(err.Error())
+      panic(upErr.Error())
     }
   }
   
   // Note the error in our database
   var error_streak int
-  err = dbConn.QueryRow(saveRepoErrorQuery, repoId, err.Error()).Scan(
+  err := dbConn.QueryRow(saveRepoErrorQuery, repoId, upErr.Error()).Scan(
     &error_streak)
   if err != nil {
     panic(err.Error())
@@ -777,7 +777,7 @@ func handleUpdateError(err error, repoId int, repoPath string) error {
       }
     }
     
-    fmt.Println("Update error: '"+err.Error()+"', pausing a second.")
+    fmt.Println("Update error: '"+upErr.Error()+"', pausing a second.")
     time.Sleep(time.Second)
     
     return nil
