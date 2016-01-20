@@ -45,7 +45,7 @@ const (
     SET (queue_state, last_download_time) = (2, NOW())
     FROM (
       SELECT id, url, force_full FROM repos
-        WHERE queue_state = 1 AND watching = True
+        WHERE queue_state = 1 AND watching = True AND enabled = True
         ORDER BY queue_time ASC LIMIT 1 FOR UPDATE
     ) found
     WHERE repos.id = found.id
