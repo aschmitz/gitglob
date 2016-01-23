@@ -192,15 +192,15 @@ func BuildPktLine(line []byte) ([]byte, error) {
   return append(encodedLen, line...), nil
 }
 
-func ReadPktLineText(reader io.Reader) ([]byte, *updateError) {
+func ReadPktLineText(reader io.Reader) ([]byte, error) {
   return ReadPktLine(reader, true)
 }
 
-func ReadPktLineBin(reader io.Reader) ([]byte, *updateError) {
+func ReadPktLineBin(reader io.Reader) ([]byte, error) {
   return ReadPktLine(reader, false)
 }
 
-func ReadPktLine(reader io.Reader, stripNewline bool) ([]byte, *updateError) {
+func ReadPktLine(reader io.Reader, stripNewline bool) ([]byte, error) {
   // Read off four bytes: ASCII representation of the hex length of the line.
   lenBuf := make([]byte, 4)
   _, err := io.ReadFull(reader, lenBuf)
@@ -253,7 +253,7 @@ func ReadPktLine(reader io.Reader, stripNewline bool) ([]byte, *updateError) {
   return readLine, nil
 }
 
-func ReadUploadPackHeader(reader io.Reader) *updateError {
+func ReadUploadPackHeader(reader io.Reader) error {
   // Note that this technically doesn't follow the smart HTTP protocol:
   //   "Clients MUST validate the first five bytes of the response entity
   //    matches the regex "^[0-9a-f]{4}#".  If this test fails, clients
@@ -263,7 +263,7 @@ func ReadUploadPackHeader(reader io.Reader) *updateError {
   //  the first four bytes as hex, and fail there, which will effectively match
   //  the described behavior.
   line, err := ReadPktLineText(reader); if err != nil {
-    err.Prefix("Unable to read initial service pkt-line: ")
+    err.(updateError).Prefix("Unable to read initial service pkt-line: ")
     return err
   }
   // "Clients MUST verify the first pkt-line is "# service=$servicename"."
@@ -279,7 +279,7 @@ func ReadUploadPackHeader(reader io.Reader) *updateError {
     }
   }
   line, err = ReadPktLineText(reader); if err != nil {
-    err.Prefix("Unable to read service-ending pkt-line: ")
+    err.(updateError).Prefix("Unable to read service-ending pkt-line: ")
     return err
   }
   // "Servers MUST terminate the response with the magic "0000" end
@@ -465,7 +465,7 @@ fmt.Println(string(request))
   req.Header.Add("Content-Type", "application/x-git-upload-pack-request")
   resp, err := client.Do(req)
   if err != nil {
-    return "", updateError{
+    return "", &updateError{
       s: "error connecting to git server for pack: "+err.Error(),
       errorName: "connect_pack",
       shouldRetry: true,
@@ -605,7 +605,7 @@ func doUpdateRepoRefs(repoId int, repoPath string, forceFull bool) error {
   req.Header.Add("Pragma", "no-cache")
   resp, err := client.Do(req)
   if err != nil {
-    err = updateError{
+    err = &updateError{
       s: "error connecting to git server for refs: "+err.Error(),
       errorName: "connect_refs",
       shouldRetry: true,
