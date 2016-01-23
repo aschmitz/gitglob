@@ -126,6 +126,9 @@ type updateError struct {
   errorName string
   shouldRetry bool
 }
+func (e updateError) Prefix(newPrefix string) {
+  e.s = newPrefix + e.s
+}
 func (e updateError) Error() string {
   return e.s
 }
@@ -189,27 +192,35 @@ func BuildPktLine(line []byte) ([]byte, error) {
   return append(encodedLen, line...), nil
 }
 
-func ReadPktLineText(reader io.Reader) ([]byte, error) {
+func ReadPktLineText(reader io.Reader) ([]byte, *updateError) {
   return ReadPktLine(reader, true)
 }
 
-func ReadPktLineBin(reader io.Reader) ([]byte, error) {
+func ReadPktLineBin(reader io.Reader) ([]byte, *updateError) {
   return ReadPktLine(reader, false)
 }
 
-func ReadPktLine(reader io.Reader, stripNewline bool) ([]byte, error) {
+func ReadPktLine(reader io.Reader, stripNewline bool) ([]byte, *updateError) {
   // Read off four bytes: ASCII representation of the hex length of the line.
   lenBuf := make([]byte, 4)
   _, err := io.ReadFull(reader, lenBuf)
   if err != nil {
-    return nil, errors.New("Couldn't read pkt-line length: " + err.Error())
+    return nil, &updateError{
+      s: "error reading pkt-line length: "+err.Error(),
+      errorName: "pkt-line",
+      shouldRetry: true,
+    }
   }
   
   // Decode those hex bytes to "real" bytes
   decodedLen := make([]byte, 2)
   _, err = hex.Decode(decodedLen, lenBuf)
   if err != nil {
-    return nil, errors.New("Couldn't decode pkt-line length: " + err.Error())
+    return nil, &updateError{
+      s: "error decoding pkt-line length: "+err.Error(),
+      errorName: "pkt-line_decode",
+      shouldRetry: true,
+    }
   }
   
   // Finally, get the line length as an integer
@@ -224,11 +235,12 @@ func ReadPktLine(reader io.Reader, stripNewline bool) ([]byte, error) {
   pktLen -= 4
   
   readLine := make([]byte, pktLen)
-  bytesRead, err := io.ReadFull(reader, readLine); if err != nil {
-    fmt.Println(bytesRead)
-    fmt.Println(hex.Dump(readLine))
-    panic(err)
-    return nil, err
+  _, err = io.ReadFull(reader, readLine); if err != nil {
+    return nil, &updateError{
+      s: "error reading pkt-line: "+err.Error(),
+      errorName: "pkt-line",
+      shouldRetry: true,
+    }
   }
   
   if stripNewline {
@@ -238,10 +250,10 @@ func ReadPktLine(reader io.Reader, stripNewline bool) ([]byte, error) {
     }
   }
   
-  return readLine, err
+  return readLine, nil
 }
 
-func ReadUploadPackHeader(reader io.Reader) error {
+func ReadUploadPackHeader(reader io.Reader) *updateError {
   // Note that this technically doesn't follow the smart HTTP protocol:
   //   "Clients MUST validate the first five bytes of the response entity
   //    matches the regex "^[0-9a-f]{4}#".  If this test fails, clients
@@ -251,20 +263,35 @@ func ReadUploadPackHeader(reader io.Reader) error {
   //  the first four bytes as hex, and fail there, which will effectively match
   //  the described behavior.
   line, err := ReadPktLineText(reader); if err != nil {
-    return errors.New("Unable to read initial service pkt-line: "+err.Error())
+    err.Prefix("Unable to read initial service pkt-line: ")
+    return err
   }
   // "Clients MUST verify the first pkt-line is "# service=$servicename"."
   if string(line) != "# service=git-upload-pack" {
-    return errors.New("Unexpected first response line: "+string(line))
+    // It's reasonable to expect that if for some reason the first four bytes
+    // were *also* valid hex and the response was long enough, with the right
+    // Content-Type, but a bad first line, something is seriously wrong, and
+    // we should inspect this manually, so don't bother retrying until then.
+    return &updateError{
+      s: "Unexpected first response line: "+string(line),
+      errorName: "pack-firstline",
+      shouldRetry: false,
+    }
   }
   line, err = ReadPktLineText(reader); if err != nil {
-    return errors.New("Unable to read service-ending pkt-line: "+err.Error())
+    err.Prefix("Unable to read service-ending pkt-line: ")
+    return err
   }
   // "Servers MUST terminate the response with the magic "0000" end
   //  pkt-line marker."
   if line != nil {
-    return errors.New("Unexpected non-empty pkt-line after service: "+
-      string(line))
+    // If everything was sane up until here, but this line isn't, there are
+    // serious problems that require manual investigation.
+    return &updateError{
+      s: "Unexpected non-empty pkt-line after service: "+string(line),
+      errorName: "pack-firstline",
+      shouldRetry: false,
+    }
   }
   
   return nil
