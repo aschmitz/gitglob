@@ -126,11 +126,19 @@ type updateError struct {
   errorName string
   shouldRetry bool
 }
+type updateErrorInterface interface {
+  Prefix()
+  Error() string
+  ShouldRetry() bool
+}
 func (e updateError) Prefix(newPrefix string) {
   e.s = newPrefix + e.s
 }
 func (e updateError) Error() string {
   return e.s
+}
+func (e updateError) ShouldRetry() bool {
+  return e.shouldRetry
 }
 
 var influxdbClient *influxdb.Client
@@ -697,8 +705,8 @@ func handleUpdateError(upErr error, repoId int, repoPath string) error {
   shouldRetry := false
   shouldForceFull := false
   errorName := "unknown"
-  typecastErr, ok := upErr.(updateError); if ok {
-    shouldRetry = typecastErr.shouldRetry
+  if typecastErr, ok := upErr.(updateErrorInterface); ok {
+    shouldRetry = typecastErr.ShouldRetry()
   } else {
     switch upErr := upErr.(type) {
     case unexpectedContentTypeError:
