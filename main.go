@@ -462,7 +462,6 @@ func DownloadNewCommits(repoPath string, diffs refDiffs,
   
   nextLine, err = BuildPktLine([]byte("done\n"))
   request = append(request, nextLine...)
-fmt.Println(string(request))
   
   // Actually request the packfile from the server.
   client := &http.Client{}
