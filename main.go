@@ -704,83 +704,81 @@ func handleUpdateError(upErr error, repoId int, repoPath string) error {
   shouldRetry := false
   shouldForceFull := false
   errorName := "unknown"
-  if typecastErr, ok := upErr.(updateErrorInterface); ok {
+  switch upErr := upErr.(type) {
+  case *updateError:
     shouldRetry = typecastErr.ShouldRetry()
-  } else {
-    switch upErr := upErr.(type) {
-    case unexpectedContentTypeError:
-      // curl -A "gitglob/0.0.1" -v -X GET \
-      // https://github.com/aschmitz/404.git/info/refs?service=git-upload-pack
-      switch upErr.resp.StatusCode {
-      case 401:
-        // This is saying we don't have permission to get the repository. That
-        // could mean a DMCA request (in which case the body will have more
-        // info), a deleted repository, a private repository, or a repository
-        // that never existed.
-        shouldRetry = false
-      default:
-        panic(upErr.Error())
-      }
-    case *net.OpError:
-      switch upErr.Err.Error() {
-      case syscall.ECONNRESET.Error():
-        // We just had the connection unexpectedly reset. That *generally*
-        // doesn't disqualify us from trying again, but we should make sure
-        // that we don't just hammer sites that are sending connection resets
-        // because of load or blocking, ideally.
-        shouldRetry = true
-        shouldForceFull = false
-        errorName = "conn_reset"
-      default:
-        // An unknown network error, so we'll panic.
-        panic(upErr.Error())
-      }
+  case unexpectedContentTypeError:
+    // curl -A "gitglob/0.0.1" -v -X GET \
+    // https://github.com/aschmitz/404.git/info/refs?service=git-upload-pack
+    switch upErr.resp.StatusCode {
+    case 401:
+      // This is saying we don't have permission to get the repository. That
+      // could mean a DMCA request (in which case the body will have more
+      // info), a deleted repository, a private repository, or a repository
+      // that never existed.
+      shouldRetry = false
     default:
-      if upErr == ZeroLengthPackfile {
-        // We didn't get any response from the git server on the other end:
-        // this might happen because we requested an object that no longer
-        // exists, or possibly(?) because we claimed to have an object that no
-        // longer exists. Queue another update of this repo, not using any
-        // known objects.
-        
-        // TODO: Determine whether this can happen when claiming to have
-        // unknown objects. If it does, we'll definitely need to not claim
-        // objects from branches that have been deleted.
-        shouldRetry = true
-        // shouldForceFull = true
-        // Just basing our next pull on up-to-date refs should work
-        shouldForceFull = false
-        errorName = "empty_packfile"
-      } else if upErr == globpack.BadPackfileChecksumError {
-        // We received a packfile with a bad checksum. This probably happened
-        // for one of two reasons:
-        // 1: The connection dropped before we received the full packfile. This
-        //    is a clear case where retrying is fine.
-        // 2: The server failed when reading the packfile. We assume this
-        //    happens when the repo is being updated, but it's difficult to
-        //    tell.
-        
-        // A log from the second case:
-        // Stdout from git server: fatal: unable to read \
-        // 66b5a57133282e153bc4b3436c0f9a246edc121a
-        // Error from git server: aborting due to possible repository \
-        // corruption on the remote side.
-        // Pack length: 103841792
-        // panic: bad packfile checksum
-        
-        // In the second case, it's *possible* that this is not a transient
-        // error, so perhaps we should have some backoff here and eventually
-        // assume the repository has been corrupted. If this ever occurs, we'll
-        // need to handle it with more grace than we do now.
-        
-        // For now, just assume an immediate retry of the exact same thing is
-        // fine.
-        shouldRetry = true
-        shouldForceFull = false
-        errorName = "bad_checksum"
-      } else {
-        panic(upErr.Error())
-      }
+      panic(upErr.Error())
+    }
+  case *net.OpError:
+    switch upErr.Err.Error() {
+    case syscall.ECONNRESET.Error():
+      // We just had the connection unexpectedly reset. That *generally*
+      // doesn't disqualify us from trying again, but we should make sure
+      // that we don't just hammer sites that are sending connection resets
+      // because of load or blocking, ideally.
+      shouldRetry = true
+      shouldForceFull = false
+      errorName = "conn_reset"
+    default:
+      // An unknown network error, so we'll panic.
+      panic(upErr.Error())
+    }
+  default:
+    if upErr == ZeroLengthPackfile {
+      // We didn't get any response from the git server on the other end:
+      // this might happen because we requested an object that no longer
+      // exists, or possibly(?) because we claimed to have an object that no
+      // longer exists. Queue another update of this repo, not using any
+      // known objects.
+      
+      // TODO: Determine whether this can happen when claiming to have
+      // unknown objects. If it does, we'll definitely need to not claim
+      // objects from branches that have been deleted.
+      shouldRetry = true
+      // shouldForceFull = true
+      // Just basing our next pull on up-to-date refs should work
+      shouldForceFull = false
+      errorName = "empty_packfile"
+    } else if upErr == globpack.BadPackfileChecksumError {
+      // We received a packfile with a bad checksum. This probably happened
+      // for one of two reasons:
+      // 1: The connection dropped before we received the full packfile. This
+      //    is a clear case where retrying is fine.
+      // 2: The server failed when reading the packfile. We assume this
+      //    happens when the repo is being updated, but it's difficult to
+      //    tell.
+      
+      // A log from the second case:
+      // Stdout from git server: fatal: unable to read \
+      // 66b5a57133282e153bc4b3436c0f9a246edc121a
+      // Error from git server: aborting due to possible repository \
+      // corruption on the remote side.
+      // Pack length: 103841792
+      // panic: bad packfile checksum
+      
+      // In the second case, it's *possible* that this is not a transient
+      // error, so perhaps we should have some backoff here and eventually
+      // assume the repository has been corrupted. If this ever occurs, we'll
+      // need to handle it with more grace than we do now.
+      
+      // For now, just assume an immediate retry of the exact same thing is
+      // fine.
+      shouldRetry = true
+      shouldForceFull = false
+      errorName = "bad_checksum"
+    } else {
+      panic(upErr.Error())
     }
   }
   
