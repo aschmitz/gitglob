@@ -706,7 +706,7 @@ func handleUpdateError(upErr error, repoId int, repoPath string) error {
   errorName := "unknown"
   switch upErr := upErr.(type) {
   case *updateError:
-    shouldRetry = typecastErr.ShouldRetry()
+    shouldRetry = upErr.ShouldRetry()
   case unexpectedContentTypeError:
     // curl -A "gitglob/0.0.1" -v -X GET \
     // https://github.com/aschmitz/404.git/info/refs?service=git-upload-pack
