@@ -552,6 +552,13 @@ func ReadUploadPackRefs(reader io.Reader) (map[string]string, map[string]string,
   
   // Pull off the capabilities
   capParts := bytes.SplitN(line, []byte{0}, 2)
+  if len(capParts) != 2 {
+    return nil, nil, updateError{
+      s: fmt.Sprintf("Only a partial capability line received: '%s'", line),
+      errorName: "cap_line",
+      shouldRetry: true,
+    }
+  }
   line, capString := capParts[0], string(capParts[1])
   
   capabilities := readCapsLine(capString)
@@ -633,13 +640,13 @@ func doUpdateRepoRefs(repoId int, repoPath string, forceFull bool) error {
   }
   
   err = ReadUploadPackHeader(resp.Body); if err != nil {
-    return err
+    return handleUpdateError(err, repoId, repoPath)
   }
   
   // We ignore the remote capabilities at the moment. We shouldn't, but we do.
   // TODO: Check for the caps we need.
   _, hexRefs, err := ReadUploadPackRefs(resp.Body); if err != nil {
-    return err
+    return handleUpdateError(err, repoId, repoPath)
   }
   resp.Body.Close()
   
@@ -648,7 +655,7 @@ func doUpdateRepoRefs(repoId int, repoPath string, forceFull bool) error {
   for refName, commithashHex := range hexRefs {
     commithash := make([]byte, 20)
     _, err := hex.Decode(commithash, []byte(commithashHex)); if err != nil {
-      return err
+      return handleUpdateError(err, repoId, repoPath)
     }
     refs[refName] = commithash
   }
