@@ -271,7 +271,7 @@ func ReadUploadPackHeader(reader io.Reader) error {
   //  the first four bytes as hex, and fail there, which will effectively match
   //  the described behavior.
   line, err := ReadPktLineText(reader); if err != nil {
-    err.(updateError).Prefix("Unable to read initial service pkt-line: ")
+    err.(*updateError).Prefix("Unable to read initial service pkt-line: ")
     return err
   }
   // "Clients MUST verify the first pkt-line is "# service=$servicename"."
@@ -287,7 +287,7 @@ func ReadUploadPackHeader(reader io.Reader) error {
     }
   }
   line, err = ReadPktLineText(reader); if err != nil {
-    err.(updateError).Prefix("Unable to read service-ending pkt-line: ")
+    err.(*updateError).Prefix("Unable to read service-ending pkt-line: ")
     return err
   }
   // "Servers MUST terminate the response with the magic "0000" end
