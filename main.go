@@ -841,9 +841,9 @@ func handleUpdateError(upErr error, repoId int, repoPath string) error {
 func readPackQueueLoop() {
     for {
     // Fetch the oldest queue entry and mark it as being in progress.
-    res, err := r.DB("gitglob").Table("queued_packs").Filter(
-      r.Row.Field("in_progress").Default(false).Eq(false)).
-        OrderBy("queue_time").
+    res, err := r.DB("gitglob").Table("queued_packs").
+        OrderBy(r.OrderByOpts {Index: "queue_time"}).
+        Filter(r.Row.Field("in_progress").Default(false).Eq(false)).
         Limit(1).
         Update(r.Branch(r.Row.Field("in_progress").Default(false).Eq(false),
           map[string]interface{} {
