@@ -608,8 +608,7 @@ func LoadPackfile(packMmapped *mmap.MmappedFile, repoPath string) error {
       // Get ready to write this object out.
       obj.AddHash()
       
-      // Write the object. We may need to use it later, so hold on to its data.
-      obj.LockDecompressedData()
+      // Write the object.
       WriteObject(&globpackWriteRequest{
         Object: obj,
         AckChan: ackChan,
@@ -638,15 +637,19 @@ fmt.Printf("First pass: %d plain objects, %d distinct delta bases\n", len(packOb
   for _, obj := range packObj.BaseObjects {
     if _, ok := packObj.DescendedFrom[obj.Hash]; ok {
       obj.DecompressIfNecessary()
+      
+      // Hold on to the data for the moment.
+      obj.LockDecompressedData()
+      
       // fmt.Printf("Recursing through object %40x\n", obj.Hash)
       err := resolvePackfileObjectsFromBase(packObj, obj, ackChan)
       if err != nil {
         panic(err)
       }
+      
+      // Free our lock on the decompressed data, as we're done with it here.
+      obj.UnlockDecompressedData()
     }
-    
-    // Free our lock on the decompressed data, as we're done with it here.
-    obj.UnlockDecompressedData()
   }
 fmt.Printf("Second pass: %d distinct delta bases remain.\n", len(packObj.DescendedFrom))
   numExternalBases := len(packObj.DescendedFrom)
