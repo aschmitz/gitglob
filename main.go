@@ -876,7 +876,9 @@ fmt.Printf("Will read: %+v\n", packFullPath)
       packMmapped, err := mmap.Open(packFullPath); if err != nil {
         panic(err.Error())
       }
-      err = globpack.LoadPackfile(packMmapped, repoPath); if err != nil {
+      err = globpack.LoadPackfile(packMmapped, repoPath);
+      packMmapped.Close()
+      if err != nil {
         if err == globpack.CouldntResolveExternalDeltasError {
           rows, err := dbConn.Query(queueRepoUpdateForceFullQuery, repoId)
           rows.Close()
@@ -1031,6 +1033,7 @@ func main() {
     err = globpack.LoadPackfile(packMmapped, "http://localhost/testpack.pack"); if err != nil {
       panic(err.Error())
     }
+    packMmapped.Close()
     return
   }
   
