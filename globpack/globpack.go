@@ -15,6 +15,7 @@ import (
   "time"
   "sync/atomic"
   
+  "github.com/aschmitz/gitglob/mmap"
   influxdb "github.com/influxdb/influxdb/client"
 )
 
@@ -550,16 +551,19 @@ func resolvePackfileObjectsFromBase(packfile *gitPackfile, base *gitObject,
   return nil
 }
 
-func LoadPackfile(packfile []byte, repoPath string) error {
+func LoadPackfile(packMmapped *mmap.MmappedFile, repoPath string) error {
+  packfile := packMmapped.Data
   packfileReader := bytes.NewReader(packfile)
   err := initGlobpackWriter(); if err != nil {
     return err
   }
   
+  packMmapped.AdviseSequential()
   err = VerifyPackfileChecksum(packfile); if err != nil {
     return err
   }
   
+  packMmapped.AdviseSequential()
   numObjects, err := ReadPackfileHeader(packfileReader); if err != nil {
     return err
   }
@@ -626,6 +630,11 @@ fmt.Printf("First pass: %d plain objects, %d distinct delta bases\n", len(packOb
   //       Apply delta
   //       Write object
   //       DFS mine DescendedFrom.
+  
+  // We're basically going to read sequentially again. It would be nice to
+  // advise that we're not going to touch areas we're skipping, but for now
+  // this is a good start.
+  packMmapped.AdviseSequential()
   for _, obj := range packObj.BaseObjects {
     if _, ok := packObj.DescendedFrom[obj.Hash]; ok {
       obj.DecompressIfNecessary()
