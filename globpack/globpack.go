@@ -636,10 +636,12 @@ fmt.Printf("First pass: %d plain objects, %d distinct delta bases\n", len(packOb
   packMmapped.AdviseSequential()
   for _, obj := range packObj.BaseObjects {
     if _, ok := packObj.DescendedFrom[obj.Hash]; ok {
-      obj.DecompressIfNecessary()
-      
-      // Hold on to the data for the moment.
+      // Note that we want to hold on to the data even before we're sure we
+      // have it.
       obj.LockDecompressedData()
+      
+      // Make sure we have the actual base object, not a compressed version.
+      obj.DecompressIfNecessary()
       
       // fmt.Printf("Recursing through object %40x\n", obj.Hash)
       err := resolvePackfileObjectsFromBase(packObj, obj, ackChan)
@@ -663,10 +665,15 @@ fmt.Printf("Second pass: %d distinct delta bases remain.\n", len(packObj.Descend
   //       Next iteration
   for baseHash, _ := range packObj.DescendedFrom {
     if base, err := GetObject(baseHash); err == nil {
+      // Do this just in case something tries to free the object
+      base.LockDecompressedData()
+      
       err = resolvePackfileObjectsFromBase(packObj, base, ackChan)
       if err != nil {
         panic(err)
       }
+      
+      base.UnlockDecompressedData()
     } else {
       fmt.Printf("Second pass unknown base object %x, err: %+v\n", baseHash, err)
     }
