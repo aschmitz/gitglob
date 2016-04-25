@@ -26,6 +26,7 @@ import (
   "strings"
   "time"
   
+  "github.com/aschmitz/gitglob/mmap"
   "github.com/aschmitz/gitglob/globpack"
   influxdb "github.com/influxdb/influxdb/client"
   _ "github.com/lib/pq"
@@ -872,12 +873,12 @@ func readPackQueueLoop() {
       
 fmt.Printf("Will read: %+v\n", packFullPath)
       
-      // TODO: This should probably be an mmap instead.
-      // https://github.com/edsrzf/mmap-go looks reasonable.
-      packfileContents, err := ioutil.ReadFile(packFullPath); if err != nil {
+      packMmapped, err := mmap.Open(packFullPath); if err != nil {
         panic(err.Error())
       }
-      err = globpack.LoadPackfile(packfileContents, repoPath); if err != nil {
+      err = globpack.LoadPackfile(packMmapped, repoPath);
+      packMmapped.Close()
+      if err != nil {
         if err == globpack.CouldntResolveExternalDeltasError {
           rows, err := dbConn.Query(queueRepoUpdateForceFullQuery, repoId)
           rows.Close()
@@ -1026,12 +1027,13 @@ func main() {
   // }
   
   if just_pack != "" {
-    packfileContents, err := ioutil.ReadFile(just_pack); if err != nil {
+    packMmapped, err := mmap.Open(just_pack); if err != nil {
       panic(err.Error())
     }
-    err = globpack.LoadPackfile(packfileContents, "http://localhost/testpack.pack"); if err != nil {
+    err = globpack.LoadPackfile(packMmapped, "http://localhost/testpack.pack"); if err != nil {
       panic(err.Error())
     }
+    packMmapped.Close()
     return
   }
   

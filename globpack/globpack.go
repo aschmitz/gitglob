@@ -15,6 +15,7 @@ import (
   "time"
   "sync/atomic"
   
+  "github.com/aschmitz/gitglob/mmap"
   influxdb "github.com/influxdb/influxdb/client"
 )
 
@@ -550,16 +551,19 @@ func resolvePackfileObjectsFromBase(packfile *gitPackfile, base *gitObject,
   return nil
 }
 
-func LoadPackfile(packfile []byte, repoPath string) error {
+func LoadPackfile(packMmapped *mmap.MmappedFile, repoPath string) error {
+  packfile := packMmapped.Data
   packfileReader := bytes.NewReader(packfile)
   err := initGlobpackWriter(); if err != nil {
     return err
   }
   
+  packMmapped.AdviseSequential()
   err = VerifyPackfileChecksum(packfile); if err != nil {
     return err
   }
   
+  packMmapped.AdviseSequential()
   numObjects, err := ReadPackfileHeader(packfileReader); if err != nil {
     return err
   }
@@ -604,8 +608,7 @@ func LoadPackfile(packfile []byte, repoPath string) error {
       // Get ready to write this object out.
       obj.AddHash()
       
-      // Write the object. We may need to use it later, so hold on to its data.
-      obj.LockDecompressedData()
+      // Write the object.
       WriteObject(&globpackWriteRequest{
         Object: obj,
         AckChan: ackChan,
@@ -626,18 +629,29 @@ fmt.Printf("First pass: %d plain objects, %d distinct delta bases\n", len(packOb
   //       Apply delta
   //       Write object
   //       DFS mine DescendedFrom.
+  
+  // We're basically going to read sequentially again. It would be nice to
+  // advise that we're not going to touch areas we're skipping, but for now
+  // this is a good start.
+  packMmapped.AdviseSequential()
   for _, obj := range packObj.BaseObjects {
     if _, ok := packObj.DescendedFrom[obj.Hash]; ok {
+      // Note that we want to hold on to the data even before we're sure we
+      // have it.
+      obj.LockDecompressedData()
+      
+      // Make sure we have the actual base object, not a compressed version.
       obj.DecompressIfNecessary()
+      
       // fmt.Printf("Recursing through object %40x\n", obj.Hash)
       err := resolvePackfileObjectsFromBase(packObj, obj, ackChan)
       if err != nil {
         panic(err)
       }
+      
+      // Free our lock on the decompressed data, as we're done with it here.
+      obj.UnlockDecompressedData()
     }
-    
-    // Free our lock on the decompressed data, as we're done with it here.
-    obj.UnlockDecompressedData()
   }
 fmt.Printf("Second pass: %d distinct delta bases remain.\n", len(packObj.DescendedFrom))
   numExternalBases := len(packObj.DescendedFrom)
@@ -651,10 +665,15 @@ fmt.Printf("Second pass: %d distinct delta bases remain.\n", len(packObj.Descend
   //       Next iteration
   for baseHash, _ := range packObj.DescendedFrom {
     if base, err := GetObject(baseHash); err == nil {
+      // Do this just in case something tries to free the object
+      base.LockDecompressedData()
+      
       err = resolvePackfileObjectsFromBase(packObj, base, ackChan)
       if err != nil {
         panic(err)
       }
+      
+      base.UnlockDecompressedData()
     } else {
       fmt.Printf("Second pass unknown base object %x, err: %+v\n", baseHash, err)
     }
