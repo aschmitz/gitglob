@@ -712,7 +712,7 @@ func handleUpdateError(upErr error, repoId int, repoPath string) error {
   shouldForceFull := false
   errorName := "unknown"
   switch upErr := upErr.(type) {
-  case *updateError:
+  case updateError:
     shouldRetry = upErr.ShouldRetry()
   case unexpectedContentTypeError:
     // curl -A "gitglob/0.0.1" -v -X GET \
