@@ -413,7 +413,7 @@ func ApplyDelta(sourceObj *gitObject, destObj *gitObject) error {
   if uint64(len(source)) != sourceLen {
     fmt.Printf("Source object: %+v\n", sourceObj)
     return errors.New(fmt.Sprintf("Unexpected mismatch in delta source length."+
-      " Expected %d, got %d.", len(source), sourceLen))
+      " Expected %d, got %d.", sourceLen, len(source)))
   }
   
   dest := new(bytes.Buffer)
@@ -667,6 +667,7 @@ fmt.Printf("Second pass: %d distinct delta bases remain.\n", len(packObj.Descend
     if base, err := GetObject(baseHash); err == nil {
       // Do this just in case something tries to free the object
       base.LockDecompressedData()
+      base.DecompressIfNecessary()
       
       err = resolvePackfileObjectsFromBase(packObj, base, ackChan)
       if err != nil {
