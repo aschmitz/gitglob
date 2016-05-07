@@ -5,6 +5,7 @@ import (
   "encoding/hex"
   "fmt"
   "net/http"
+  "strconv"
   "strings"
   "runtime"
   
@@ -43,7 +44,7 @@ func writeInfoRefs(repoPath string, w http.ResponseWriter, req *http.Request) {
   }
 }
 
-func writeObject(objHashStr string, w http.ResponseWriter, req *http.Request) {
+func writeObject(objHashStr string, w http.ResponseWriter, req *http.Request, asGit bool) {
   var objHash [hashLen]byte
   decLen, err := hex.Decode(objHash[:], []byte(objHashStr))
   if err != nil || decLen != hashLen {
@@ -56,21 +57,52 @@ func writeObject(objHashStr string, w http.ResponseWriter, req *http.Request) {
     return
   }
   
-  zlibWriter := zlib.NewWriter(w)
-  fmt.Fprintf(zlibWriter, "%s %d\x00", globpack.GetObjectTypeString(obj.Type),
-    len(obj.Data))
-  zlibWriter.Write(obj.Data)
-  zlibWriter.Close()
+  if asGit {
+    w.Header().Set("Content-Type", "application/x-git-object")
+    w.WriteHeader(http.StatusOK)
+    zlibWriter := zlib.NewWriter(w)
+    fmt.Fprintf(zlibWriter, "%s %d\x00", globpack.GetObjectTypeString(obj.Type),
+      len(obj.Data))
+    zlibWriter.Write(obj.Data)
+    zlibWriter.Close()
+  } else {
+    w.Header().Set("Content-Type", "application/octet-stream")
+    w.Header().Set("X-Git-Type", globpack.GetObjectTypeString(obj.Type))
+    w.Header().Set("Content-Length", strconv.Itoa(len(obj.Data)))
+    w.WriteHeader(http.StatusOK)
+    w.Write(obj.Data)
+  }
 }
 
 func handler(w http.ResponseWriter, req *http.Request) {
+  sepLoc := strings.Index(req.URL.Path[1:], "/")
+  requestType := req.URL.Path[0:sepLoc+1]
+  switch {
+  case requestType == "/object":
+    handleObjectReq(w, req)
+  case requestType == "/repo":
+    handleRepoReq(w, req)
+  default:
+    http.Error(w, requestType, http.StatusInternalServerError)
+    // http.NotFound(w, req)
+  }
+}
+
+func handleObjectReq(w http.ResponseWriter, req *http.Request) {
+  // Strip off "/object/"
+  objHash := req.URL.Path[8:]
+  writeObject(objHash, w, req, false)
+}
+
+func handleRepoReq(w http.ResponseWriter, req *http.Request) {
   gitPathSuffixIndex := strings.LastIndex(req.URL.Path, ".git")
   if gitPathSuffixIndex == -1 {
     http.NotFound(w, req)
     return
   }
   gitPathSuffixIndex += 4
-  repoPath := req.URL.Path[1:gitPathSuffixIndex]
+  // Cut off the "/repo/" at the beginning and any query string
+  repoPath := req.URL.Path[6:gitPathSuffixIndex]
   // Most software will replace http:// in a URL with http:/, so double up that
   // slash for the repository URL.
   repoPath = strings.Replace(repoPath, ":/", "://", 1)
@@ -90,7 +122,7 @@ func handler(w http.ResponseWriter, req *http.Request) {
       // because all repositories are assumed to be public, and may share
       // objects.
       objHash := pathRemainder[9:11] + pathRemainder[12:]
-      writeObject(objHash, w, req)
+      writeObject(objHash, w, req, true)
     default:
       http.NotFound(w, req)
   }
