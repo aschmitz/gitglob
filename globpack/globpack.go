@@ -2,18 +2,17 @@ package globpack
 
 import (
   "bytes"
-  "github.com/aschmitz/gitglob/debugging/flate"
-  "github.com/aschmitz/gitglob/debugging/zlib"
   "crypto/sha1"
   "encoding/binary"
-// "encoding/hex"
   "errors"
   "fmt"
+  "github.com/aschmitz/gitglob/git"
   "io"
   "io/ioutil"
   "net/url"
   "time"
   "sync/atomic"
+  "github.com/aschmitz/gitglob/debugging/zlib"
   
   "github.com/aschmitz/gitglob/mmap"
   influxdb "github.com/influxdb/influxdb/client"
@@ -23,48 +22,15 @@ const (
   hashLen = sha1.Size // The length of an object hash
 )
 
-const (
-  gitTypeCommit      = 1
-  gitTypeTree        = 2
-  gitTypeBlob        = 3
-  gitTypeTag         = 4
-  gitTypeOffsetDelta = 6
-  gitTypeRefDelta    = 7
-  
-  objCompressedNone  = 0
-  objCompressedFull  = 1
-  objCompressedDelta = 2
-  
-  zlibFastestLevel = 0
-  zlibFastLevel    = 1
-  zlibDefaultLevel = 2
-  zlibBestLevel    = 3
-)
-
-type gitObject struct {
-  Type int           // The git ID for the object type
-  Hash [hashLen]byte // Object hash, may be nil
-  Data []byte        // The full object data, may be nil
-  Delta []byte       // A delta, if any
-  Refs [hashLen]byte // The object ID that this delta references
-  Depth int          // The number of objects "below" this delta
-  CompressedData []byte // A slice of the *deflated* data for this object
-  CompressedType int // The type of compressed data stored
-  CompressedLevel int // The compression level claimed for the compressed data
-  GitpackSize int    // TODO: For debugging, should probably be removed
-  // The number of outstanding locks on the object's decompressed data
-  DecompressedLockCount uint32
-}
-
 type gitPackfile struct {
   // A copy of the packfile itself.
   Data []byte
   // A reader for the packfile data.
   Reader io.ReadSeeker
   // File positions of objects which are not deltas.
-  BaseObjects []*gitObject
+  BaseObjects []*git.Object
   // Locations of objects which are deltas, indexed by their base hash.
-  DescendedFrom map[[hashLen]byte][]*gitObject
+  DescendedFrom map[[hashLen]byte][]*git.Object
 }
 
 type GlobpackObjLoc struct {
@@ -229,9 +195,8 @@ func VerifyPackfileChecksum(packfile []byte) error {
   return nil
 }
 
-func ReadPackfileObject(packfile *gitPackfile) (*gitObject, error) {
+func ReadPackfileObject(packfile *gitPackfile) (*git.Object, error) {
   reader := packfile.Reader
-startLoc, _ := reader.Seek(0, 1)
   // First, read the object type and *inflated* size.
   readByte := make([]byte, 1);
   _, err := reader.Read(readByte); if err != nil {
@@ -244,7 +209,7 @@ startLoc, _ := reader.Seek(0, 1)
   //  significant bits of the size.
   // For the continuation bytes, the MSB is a continuation bit, and the
   //  remaining seven bits are the next least significant bits of the size.
-  obj := new(gitObject)
+  obj := new(git.Object)
   obj.Type = int((sizeByte & 0x70) >> 4)
   size := uint(sizeByte & 0x0f)
   shift := uint(4)
@@ -259,9 +224,9 @@ startLoc, _ := reader.Seek(0, 1)
   }
   
   // Is this a reference to another object?
-  // Note that we currently don't support gitTypeOffsetDelta.
+  // Note that we currently don't support GitTypeOffsetDelta.
   var isDelta = false
-  if obj.Type == gitTypeRefDelta {
+  if obj.Type == git.GitTypeRefDelta {
     isDelta = true
     objRef := make([]byte, hashLen)
     sizeRead, err := reader.Read(objRef); if err != nil {
@@ -293,12 +258,12 @@ startLoc, _ := reader.Seek(0, 1)
   if isDelta {
     obj.Delta = decompressedData
     obj.Depth = -1
-    obj.CompressedType = objCompressedDelta
+    obj.CompressedType = git.ObjCompressedDelta
     atomic.AddUint64(&gitpackReaderStats.Deltas, 1)
   } else {
     obj.Data = decompressedData
     obj.Depth = 0
-    obj.CompressedType = objCompressedFull
+    obj.CompressedType = git.ObjCompressedFull
   }
   
   // Extract the compressed data to reference it as well.
@@ -330,77 +295,10 @@ startLoc, _ := reader.Seek(0, 1)
   
   atomic.AddUint64(&gitpackReaderStats.Objects, 1)
   
-endLoc, _ := reader.Seek(0, 1)
-obj.GitpackSize = int(endLoc - startLoc)
-
   return obj, nil
 }
 
-func (obj *gitObject) HasDelta() bool {
-  return (obj.Delta != nil) || (obj.CompressedType == objCompressedDelta)
-}
-
-func (obj *gitObject) DecompressIfNecessary() error {
-  // Do we even need to decompress anything?
-  switch obj.CompressedType {
-    case objCompressedDelta: if obj.Delta != nil { return nil }
-    case objCompressedFull: if obj.Data != nil { return nil }
-    case objCompressedNone: return nil
-    default: return errors.New("unexpected unknown compressed data type")
-  }
-  
-  // Decompress the data
-// fmt.Printf("Reading deflated data from %40x (%d bytes):\n%s", obj.Hash, len(obj.CompressedData), hex.Dump(obj.CompressedData))
-  decompressedReader := flate.NewReader(bytes.NewReader(obj.CompressedData))
-  decompressedData, err := ioutil.ReadAll(decompressedReader)
-  if err != nil {
-    return err
-  }
-  
-  // Store it in the right place
-  switch obj.CompressedType {
-    case objCompressedDelta: obj.Delta = decompressedData
-    case objCompressedFull: obj.Data = decompressedData
-  }
-  
-  return nil
-}
-
-func (obj *gitObject) LockDecompressedData() {
-  atomic.AddUint32(&obj.DecompressedLockCount, 1)
-}
-
-func (obj *gitObject) UnlockDecompressedData() {
-  // From the go atomic documentation:
-  // "In particular, to decrement x, do AddUint32(&x, ^uint32(0))."
-  remaining := atomic.AddUint32(&obj.DecompressedLockCount, ^uint32(0))
-  
-  // Can we clear the decompressed data?
-  if remaining == 0 && obj.CompressedType != objCompressedNone {
-    obj.Delta = nil
-    obj.Data = nil
-  }
-}
-
-func GetObjectTypeString(objType int) string {
-  switch objType {
-    case gitTypeCommit: return "commit"
-    case gitTypeTree: return "tree"
-    case gitTypeBlob: return "blob"
-    case gitTypeTag: return "tag"
-    default: return "unknown"
-  }
-}
-
-func (obj *gitObject) AddHash() {
-  hash := sha1.New()
-  fmt.Fprintf(hash, "%s %d\x00", GetObjectTypeString(obj.Type), len(obj.Data))
-  hash.Write(obj.Data)
-  fullHash := hash.Sum(nil)
-  copy(obj.Hash[:hashLen], fullHash)
-}
-
-func ApplyDelta(sourceObj *gitObject, destObj *gitObject) error {
+func ApplyDelta(sourceObj *git.Object, destObj *git.Object) error {
   source := sourceObj.Data
   deltaReader := bytes.NewReader(destObj.Delta)
   sourceLen, err := binary.ReadUvarint(deltaReader); if err != nil {
@@ -522,7 +420,7 @@ func ApplyDelta(sourceObj *gitObject, destObj *gitObject) error {
   return nil
 }
 
-func resolvePackfileObjectsFromBase(packfile *gitPackfile, base *gitObject,
+func resolvePackfileObjectsFromBase(packfile *gitPackfile, base *git.Object,
   ackChan chan *GlobpackObjLoc) error {
   for _, obj := range packfile.DescendedFrom[base.Hash] {
     obj.DecompressIfNecessary()
@@ -590,7 +488,7 @@ func LoadPackfile(packMmapped *mmap.MmappedFile, repoPath string) error {
   packObj := new(gitPackfile)
   packObj.Data = packfile
   packObj.Reader = packfileReader
-  packObj.DescendedFrom = make(map[[hashLen]byte][]*gitObject)
+  packObj.DescendedFrom = make(map[[hashLen]byte][]*git.Object)
   for objOn :=0; objOn < numObjects; objOn++ {
     // Read an object from the packfile.
     obj, err := ReadPackfileObject(packObj); if err != nil {

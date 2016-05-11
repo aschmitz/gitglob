@@ -6,6 +6,7 @@ import (
   "encoding/binary"
   "errors"
   "fmt"
+  "github.com/aschmitz/gitglob/git"
   "io"
   "io/ioutil"
   "os"
@@ -159,7 +160,7 @@ func lookupWatcher(lookups <-chan *globpackLookupRequest) {
   }
 }
 
-func GetObject(id [hashLen]byte) (*gitObject, error) {
+func GetObject(id [hashLen]byte) (*git.Object, error) {
   loc, err := LookupObjLocation(id); if err != nil {
     return nil, err
   }
@@ -197,7 +198,7 @@ func GetObject(id [hashLen]byte) (*gitObject, error) {
     return nil, err
   }
   
-  obj := &gitObject{}
+  obj := &git.Object{}
   if (storedType & 0x08) > 0 {
     // This is a delta object. Resolve the base object first.
     var baseHash [hashLen]byte
