@@ -152,11 +152,11 @@ func handleTreeReq(w http.ResponseWriter, req *http.Request) {
   
   seenTrees := make(map[[git.HashLen]byte]bool)
   
-  recurseTreeReq(commit.Tree, w, seenTrees)
+  recurseTreeReq([]byte{}, commit.Tree, w, seenTrees)
 }
 
-func recurseTreeReq(treeHash [git.HashLen]byte, w http.ResponseWriter,
-  seenTrees map[[git.HashLen]byte]bool) {
+func recurseTreeReq(pathPrefix []byte, treeHash [git.HashLen]byte,
+  w http.ResponseWriter, seenTrees map[[git.HashLen]byte]bool) {
   var treeObj *git.Object
   var treeEntries []git.TreeEntry
   var err error
@@ -178,7 +178,8 @@ func recurseTreeReq(treeHash [git.HashLen]byte, w http.ResponseWriter,
   // Read each entry
   for _, treeEntry := range treeEntries {
     // Write this entry to the list
-    w.Write(treeEntry.Name)
+    fullPath := append(pathPrefix, treeEntry.Name...)
+    w.Write(fullPath)
     w.Write([]byte("\n"))
     
     // If this was a directory, we may want to recurse
@@ -189,7 +190,7 @@ func recurseTreeReq(treeHash [git.HashLen]byte, w http.ResponseWriter,
         seenTrees[treeEntry.Hash] = true
         
         // And recurse into it.
-        recurseTreeReq(treeEntry.Hash, w, seenTrees)
+        recurseTreeReq(append(fullPath, byte('/')), treeEntry.Hash, w, seenTrees)
       }
     }
   }
