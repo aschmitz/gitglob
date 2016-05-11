@@ -150,7 +150,7 @@ func handleTreeReq(w http.ResponseWriter, req *http.Request) {
   
   commit, err := obj.ReadCommit()
   
-  var seenTrees map[[git.HashLen]byte]bool
+  seenTrees := make(map[[git.HashLen]byte]bool)
   
   recurseTreeReq(commit.Tree, w, seenTrees)
 }

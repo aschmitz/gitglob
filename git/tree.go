@@ -84,7 +84,6 @@ func (obj *Object) ReadTree() (entries []TreeEntry, err error) {
     }
     
     entries = append(entries, entry)
-    fmt.Printf("Tree entry: %+v\n", entry)
   }
   
   return
