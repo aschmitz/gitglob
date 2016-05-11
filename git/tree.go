@@ -9,6 +9,14 @@ import (
   "strconv"
 )
 
+const (
+  GitModeFile        = 0100644
+  GitModeExecutable  = 0100755
+  GitModeTree        = 0040000
+  GitModeSymlink     = 0120000
+  GitModeSubmodule   = 0160000
+)
+
 type TreeEntry struct {
   Mode int           // The file type for this entry
   Name []byte        // The name for this file, may contain any non-null bytes

@@ -4,15 +4,6 @@ import (
   "bytes"
   "encoding/hex"
   "errors"
-  "fmt"
-)
-
-const (
-  GitModeFile        = 0100644
-  GitModeExecutable  = 0100755
-  GitModeTree        = 0040000
-  GitModeSymlink     = 0120000
-  GitModeSubmodule   = 0160000
 )
 
 type CommitHeader struct {
@@ -107,8 +98,6 @@ func (obj *Object) ReadCommit() (commit Commit, err error) {
   }
   
   commit.CommitMessage = commitData[1:]
-  
-  fmt.Printf("Commit: %+v\n", commit)
   
   return
 }

@@ -15,10 +15,6 @@ import (
   r "github.com/dancannon/gorethink"
 )
 
-const (
-  hashLen = 20
-)
-
 var rSession *r.Session
 
 func writeInfoRefs(repoPath string, w http.ResponseWriter, req *http.Request) {
@@ -47,11 +43,11 @@ func writeInfoRefs(repoPath string, w http.ResponseWriter, req *http.Request) {
 }
 
 func getObjectByHex(objHashStr string) (obj *git.Object, err error) {
-  var objHash [hashLen]byte
+  var objHash [git.HashLen]byte
   var decLen int
   
   decLen, err = hex.Decode(objHash[:], []byte(objHashStr))
-  if err != nil || decLen != hashLen {
+  if err != nil || decLen != git.HashLen {
     err = errors.New("500 object hash decode error")
     return
   }
@@ -154,9 +150,49 @@ func handleTreeReq(w http.ResponseWriter, req *http.Request) {
   
   commit, err := obj.ReadCommit()
   
-  w.Write(commit.Author)
+  var seenTrees map[[git.HashLen]byte]bool
   
-  // var seenTrees map[[hashLen]byte]bool;
+  recurseTreeReq(commit.Tree, w, seenTrees)
+}
+
+func recurseTreeReq(treeHash [git.HashLen]byte, w http.ResponseWriter,
+  seenTrees map[[git.HashLen]byte]bool) {
+  var treeObj *git.Object
+  var treeEntries []git.TreeEntry
+  var err error
+  
+  // Load the tree from disk
+  treeObj, err = globpack.GetObject(treeHash)
+  if err != nil {
+    w.Write([]byte("Error looking up tree object: "+err.Error()))
+    return
+  }
+  
+  // Try to read the list of entries in the tree
+  treeEntries, err = treeObj.ReadTree()
+  if err != nil {
+    w.Write([]byte("Error reading tree object: "+err.Error()))
+    return
+  }
+  
+  // Read each entry
+  for _, treeEntry := range treeEntries {
+    // Write this entry to the list
+    w.Write(treeEntry.Name)
+    w.Write([]byte("\n"))
+    
+    // If this was a directory, we may want to recurse
+    if treeEntry.Mode == git.GitModeTree {
+      // Have we seen this?
+      _, exists := seenTrees[treeEntry.Hash]; if !exists {
+        // No, say we've seen it now.
+        seenTrees[treeEntry.Hash] = true
+        
+        // And recurse into it.
+        recurseTreeReq(treeEntry.Hash, w, seenTrees)
+      }
+    }
+  }
 }
 
 func main() {
