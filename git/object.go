@@ -91,7 +91,7 @@ func (obj *Object) UnlockDecompressedData() {
   }
 }
 
-func (obj *Object) ObjectTypeString() string {
+func (obj *Object) TypeString() string {
   switch obj.Type {
     case GitTypeCommit: return "commit"
     case GitTypeTree: return "tree"
@@ -103,7 +103,7 @@ func (obj *Object) ObjectTypeString() string {
 
 func (obj *Object) AddHash() {
   hash := sha1.New()
-  fmt.Fprintf(hash, "%s %d\x00", obj.ObjectTypeString(), len(obj.Data))
+  fmt.Fprintf(hash, "%s %d\x00", obj.TypeString(), len(obj.Data))
   hash.Write(obj.Data)
   fullHash := hash.Sum(nil)
   copy(obj.Hash[:HashLen], fullHash)

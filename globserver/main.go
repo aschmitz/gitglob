@@ -3,7 +3,9 @@ package main
 import (
   "compress/zlib"
   "encoding/hex"
+  "errors"
   "fmt"
+  "github.com/aschmitz/gitglob/git"
   "net/http"
   "strconv"
   "strings"
@@ -44,16 +46,22 @@ func writeInfoRefs(repoPath string, w http.ResponseWriter, req *http.Request) {
   }
 }
 
-func writeObject(objHashStr string, w http.ResponseWriter, req *http.Request, asGit bool) {
+func getObjectByHex(objHashStr string) (obj *git.Object, err error) {
   var objHash [hashLen]byte
-  decLen, err := hex.Decode(objHash[:], []byte(objHashStr))
+  var decLen int
+  
+  decLen, err = hex.Decode(objHash[:], []byte(objHashStr))
   if err != nil || decLen != hashLen {
-    http.Error(w, "500 object hash decode error",
-      http.StatusInternalServerError)
+    err = errors.New("500 object hash decode error")
     return
   }
-  obj, err := globpack.GetObject(objHash); if err != nil {
-    http.Error(w, "500 object retrieval error", http.StatusInternalServerError)
+  obj, err = globpack.GetObject(objHash)
+  return
+}
+
+func writeObject(objHashStr string, w http.ResponseWriter, req *http.Request, asGit bool) {
+  obj, err := getObjectByHex(objHashStr); if err != nil {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
     return
   }
   
@@ -61,13 +69,13 @@ func writeObject(objHashStr string, w http.ResponseWriter, req *http.Request, as
     w.Header().Set("Content-Type", "application/x-git-object")
     w.WriteHeader(http.StatusOK)
     zlibWriter := zlib.NewWriter(w)
-    fmt.Fprintf(zlibWriter, "%s %d\x00", globpack.GetObjectTypeString(obj.Type),
+    fmt.Fprintf(zlibWriter, "%s %d\x00", obj.TypeString(),
       len(obj.Data))
     zlibWriter.Write(obj.Data)
     zlibWriter.Close()
   } else {
     w.Header().Set("Content-Type", "application/octet-stream")
-    w.Header().Set("X-Git-Type", globpack.GetObjectTypeString(obj.Type))
+    w.Header().Set("X-Git-Type", obj.TypeString())
     w.Header().Set("Content-Length", strconv.Itoa(len(obj.Data)))
     w.WriteHeader(http.StatusOK)
     w.Write(obj.Data)
@@ -82,6 +90,8 @@ func handler(w http.ResponseWriter, req *http.Request) {
     handleObjectReq(w, req)
   case requestType == "/repo":
     handleRepoReq(w, req)
+  case requestType == "/tree":
+    handleTreeReq(w, req)
   default:
     http.Error(w, requestType, http.StatusInternalServerError)
     // http.NotFound(w, req)
@@ -101,7 +111,7 @@ func handleRepoReq(w http.ResponseWriter, req *http.Request) {
     return
   }
   gitPathSuffixIndex += 4
-  // Cut off the "/repo/" at the beginning and any query string
+  // Cut off the "/repo/" at the beginning and any extra path
   repoPath := req.URL.Path[6:gitPathSuffixIndex]
   // Most software will replace http:// in a URL with http:/, so double up that
   // slash for the repository URL.
@@ -126,6 +136,27 @@ func handleRepoReq(w http.ResponseWriter, req *http.Request) {
     default:
       http.NotFound(w, req)
   }
+}
+
+func handleTreeReq(w http.ResponseWriter, req *http.Request) {
+  // Strip off the object ID from "/tree/[object ID]"
+  objHashStr := req.URL.Path[6:]
+  
+  obj, err := getObjectByHex(objHashStr); if err != nil {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+    return
+  }
+  
+  if obj.Type != 1 {
+    http.Error(w, "400 object is not a commit", http.StatusBadRequest)
+    return
+  }
+  
+  commit, err := obj.ReadCommit()
+  
+  w.Write(commit.Author)
+  
+  // var seenTrees map[[hashLen]byte]bool;
 }
 
 func main() {
