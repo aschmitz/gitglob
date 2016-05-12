@@ -78,6 +78,63 @@ func writeObject(objHashStr string, w http.ResponseWriter, req *http.Request, as
   }
 }
 
+func writeTree(commitObj *git.Object, w http.ResponseWriter) {
+  if commitObj.Type != git.GitTypeCommit {
+    http.Error(w, "400 object is not a commit", http.StatusBadRequest)
+    return
+  }
+  
+  commit, err := commitObj.ReadCommit()
+  if err != nil {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+  }
+  
+  seenTrees := make(map[[git.HashLen]byte]bool)
+  
+  writeTreeRecurse([]byte{}, commit.Tree, w, seenTrees)
+}
+
+func writeTreeRecurse(pathPrefix []byte, treeHash [git.HashLen]byte,
+  w http.ResponseWriter, seenTrees map[[git.HashLen]byte]bool) {
+  var treeObj *git.Object
+  var treeEntries []git.TreeEntry
+  var err error
+  
+  // Load the tree from disk
+  treeObj, err = globpack.GetObject(treeHash)
+  if err != nil {
+    w.Write([]byte("Error looking up tree object: "+err.Error()))
+    return
+  }
+  
+  // Try to read the list of entries in the tree
+  treeEntries, err = treeObj.ReadTree()
+  if err != nil {
+    w.Write([]byte("Error reading tree object: "+err.Error()))
+    return
+  }
+  
+  // Read each entry
+  for _, treeEntry := range treeEntries {
+    // Write this entry to the list
+    fullPath := append(pathPrefix, treeEntry.Name...)
+    w.Write(fullPath)
+    w.Write([]byte("\n"))
+    
+    // If this was a directory, we may want to recurse
+    if treeEntry.Mode == git.GitModeTree {
+      // Have we seen this?
+      _, exists := seenTrees[treeEntry.Hash]; if !exists {
+        // No, say we've seen it now.
+        seenTrees[treeEntry.Hash] = true
+        
+        // And recurse into it.
+        writeTreeRecurse(append(fullPath, byte('/')), treeEntry.Hash, w, seenTrees)
+      }
+    }
+  }
+}
+
 func handler(w http.ResponseWriter, req *http.Request) {
   sepLoc := strings.Index(req.URL.Path[1:], "/")
   requestType := req.URL.Path[0:sepLoc+1]
@@ -120,6 +177,9 @@ func handleRepoReq(w http.ResponseWriter, req *http.Request) {
     case pathRemainder == "/info/refs":
       // /info/refs is a request for a list of commit hashes and refs
       writeInfoRefs(repoPath, w, req)
+    case pathRemainder[0:6] == "/tree/":
+      // List all files in the commit referred to by the ref after /tree/.
+      handleTreeRefReq(repoPath, pathRemainder[6:], w, req)
     case (len(pathRemainder) == 50 && pathRemainder[0:9] == "/objects/" &&
       pathRemainder[11:12] == "/"):
       // /objects/5a/d095d6b595e6a9b15b5ffa659907229a9088ee is a request for the
@@ -134,66 +194,42 @@ func handleRepoReq(w http.ResponseWriter, req *http.Request) {
   }
 }
 
+func handleTreeRefReq(repoPath string, refName string, w http.ResponseWriter, req *http.Request) {
+  res, err := r.DB("gitglob").Table("refs_latest").Get(repoPath).Field("refs").Field(refName).Run(rSession)
+  if err != nil {
+    http.Error(w, "500 ref lookup error", http.StatusInternalServerError)
+    return
+  }
+  
+  var commithash [20]byte
+  err = res.One(&commithash)
+  
+  switch {
+  case err == r.ErrEmptyResult:
+    http.NotFound(w, req)
+  case err != nil:
+    http.Error(w, "500 refs lookup error: reading",
+      http.StatusInternalServerError)
+  default:
+    commitObj, err := globpack.GetObject(commithash)
+    if err != nil {
+      http.Error(w, "500 commit lookup error", http.StatusInternalServerError)
+      return
+    }
+    writeTree(commitObj, w)
+  }
+}
+
 func handleTreeReq(w http.ResponseWriter, req *http.Request) {
   // Strip off the object ID from "/tree/[object ID]"
   objHashStr := req.URL.Path[6:]
   
-  obj, err := getObjectByHex(objHashStr); if err != nil {
+  commitObj, err := getObjectByHex(objHashStr); if err != nil {
     http.Error(w, err.Error(), http.StatusInternalServerError)
     return
   }
   
-  if obj.Type != 1 {
-    http.Error(w, "400 object is not a commit", http.StatusBadRequest)
-    return
-  }
-  
-  commit, err := obj.ReadCommit()
-  
-  seenTrees := make(map[[git.HashLen]byte]bool)
-  
-  recurseTreeReq([]byte{}, commit.Tree, w, seenTrees)
-}
-
-func recurseTreeReq(pathPrefix []byte, treeHash [git.HashLen]byte,
-  w http.ResponseWriter, seenTrees map[[git.HashLen]byte]bool) {
-  var treeObj *git.Object
-  var treeEntries []git.TreeEntry
-  var err error
-  
-  // Load the tree from disk
-  treeObj, err = globpack.GetObject(treeHash)
-  if err != nil {
-    w.Write([]byte("Error looking up tree object: "+err.Error()))
-    return
-  }
-  
-  // Try to read the list of entries in the tree
-  treeEntries, err = treeObj.ReadTree()
-  if err != nil {
-    w.Write([]byte("Error reading tree object: "+err.Error()))
-    return
-  }
-  
-  // Read each entry
-  for _, treeEntry := range treeEntries {
-    // Write this entry to the list
-    fullPath := append(pathPrefix, treeEntry.Name...)
-    w.Write(fullPath)
-    w.Write([]byte("\n"))
-    
-    // If this was a directory, we may want to recurse
-    if treeEntry.Mode == git.GitModeTree {
-      // Have we seen this?
-      _, exists := seenTrees[treeEntry.Hash]; if !exists {
-        // No, say we've seen it now.
-        seenTrees[treeEntry.Hash] = true
-        
-        // And recurse into it.
-        recurseTreeReq(append(fullPath, byte('/')), treeEntry.Hash, w, seenTrees)
-      }
-    }
-  }
+  writeTree(commitObj, w)
 }
 
 func main() {
