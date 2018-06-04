@@ -18,6 +18,7 @@ import (
   "os"
   "os/signal"
   "syscall"
+  "regexp"
   "runtime"
   "runtime/debug"
 // "runtime/pprof"
@@ -109,6 +110,7 @@ type commitFetchJob struct {
 }
 
 var ZeroLengthPackfile = errors.New("zero length packfile")
+var refNameIgnoreRegex = regexp.MustCompile(`^refs/pull/\d+/merge$`)
 
 type unexpectedContentTypeError struct {
   errorName string
@@ -654,6 +656,11 @@ func doUpdateRepoRefs(repoId int, repoPath string, forceFull bool) error {
   // Get the commits as the byte versions, not the hex ones.
   refs := make(map[string][]byte)
   for refName, commithashHex := range hexRefs {
+    // Filter for only the ones we actually care about.
+    if refNameIgnoreRegex.Match([]byte(refName)) {
+      continue
+    }
+    
     commithash := make([]byte, 20)
     _, err := hex.Decode(commithash, []byte(commithashHex)); if err != nil {
       return handleUpdateError(err, repoId, repoPath)
