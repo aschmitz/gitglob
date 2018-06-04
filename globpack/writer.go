@@ -295,7 +295,7 @@ func initGlobpackWriter() error {
       return err
     }
     
-    redisConn, err = redis.Dial("tcp", ":16379"); if err != nil {
+    redisConn, err = redis.Dial("tcp", ":6479"); if err != nil {
       panic(err)
     }
   

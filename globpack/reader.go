@@ -100,7 +100,7 @@ func FilenumToFilename(filenum uint64) string {
 }
 
 func lookupWatcher(lookups <-chan *globpackLookupRequest) {
-  redisConn, err := redis.Dial("tcp", ":16379"); if err != nil {
+  redisConn, err := redis.Dial("tcp", ":6479"); if err != nil {
     panic(err)
   }
   defer redisConn.Close()
