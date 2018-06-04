@@ -553,6 +553,15 @@ func ReadUploadPackRefs(reader io.Reader) (map[string]string, map[string]string,
       err.Error())
   }
   
+  // Was this a completely empty repo?
+  // GitHub likes to do this with repos that have deleted all of their contents
+  // or are wiki-only repositories. See, for example:
+  // * https://github.com/trevp/axolotl.git
+  // * https://github.com/hackpad/hackpad.git
+  if line == nil {
+    return map[string]string{}, map[string]string{}, nil
+  }
+  
   // Pull off the capabilities
   capParts := bytes.SplitN(line, []byte{0}, 2)
   if len(capParts) != 2 {
@@ -721,6 +730,8 @@ func handleUpdateError(upErr error, repoId int, repoPath string) error {
   errorName := "unknown"
   switch upErr := upErr.(type) {
   case updateError:
+    shouldRetry = upErr.ShouldRetry()
+  case *updateError:
     shouldRetry = upErr.ShouldRetry()
   case unexpectedContentTypeError:
     // curl -A "gitglob/0.0.1" -v -X GET \

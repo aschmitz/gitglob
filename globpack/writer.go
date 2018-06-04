@@ -6,6 +6,7 @@ import (
   "encoding/binary"
   "errors"
   "fmt"
+  "github.com/aschmitz/gitglob/git"
   "hash"
   "math/rand"
   "os"
@@ -51,7 +52,7 @@ type globpackWriteRecord struct {
 }
 
 type globpackWriteRequest struct {
-  Object *gitObject // The gitObject to write
+  Object *git.Object // The git.Object to write
   // A channel to write to for indicating the write is done
   AckChan chan<- *GlobpackObjLoc
 }
@@ -139,12 +140,12 @@ func handleCompression() {
       // We want to write a full version of this object: we didn't get a diff,
       // or this is at our maximum depth.
       toWrite = obj.Data
-      toWriteType = objCompressedFull
+      toWriteType = git.ObjCompressedFull
     } else {
       // This is a diff. Write the correct flag.
       typeByte |= 0x8
       toWrite = obj.Delta
-      toWriteType = objCompressedDelta
+      toWriteType = git.ObjCompressedDelta
       atomic.AddUint64(&globpackWriterStats.Deltas, 1)
     }
     
@@ -160,7 +161,7 @@ func handleCompression() {
     // Do we already have a compressed copy from the gitpack?
     if toWriteType == obj.CompressedType {
       // We do. Did we like the compression level?
-      if obj.CompressedLevel >= zlibDefaultLevel {
+      if obj.CompressedLevel >= git.ZlibDefaultLevel {
         // Yep. Use that then, assuming there were any savings.
         if len(obj.CompressedData) < len(toWrite) {
           toWrite = obj.CompressedData
