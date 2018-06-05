@@ -85,6 +85,26 @@ const (
   disableRepoQuery = `UPDATE repos
     SET (enabled) = (FALSE)
     WHERE id = $1`
+  
+  addToQueuedPacksQuery = `INSERT INTO queued_packs
+    (filename, repo_path, repo_id, queue_time) VALUES
+    ($1, $2, $3, NOW())`
+  
+  getNextQueuedPackQuery = `UPDATE queued_packs
+    SET in_progress = 1
+    WHERE in_progress = 0
+    ORDER BY queue_time ASC
+    LIMIT 1
+    RETURNING pack_filename, repo_path, repo_id`
+  
+  removeQueuedPackQuery = `DELETE FROM queued_packs
+    WHERE id = $1`
+)
+
+var (
+  preparedAddToQueuedPacks  *sql.Stmt
+  preparedGetNextQueuedPack *sql.Stmt
+  preparedRemoveQueuedPack  *sql.Stmt
 )
 
 type GitglobConf struct {
@@ -690,15 +710,7 @@ func doUpdateRepoRefs(repoId int, repoPath string, forceFull bool) error {
       // filename may be blank if for some reason we already had all of these
       // commits.
       if filename != "" {
-        _, err = r.DB("gitglob").Table("queued_packs").Insert(
-          map[string]interface{} {
-            "id": filename,
-            "repo_path": repoPath,
-            "repo_id": repoId,
-            "queue_time": r.Now(),
-          }, r.InsertOpts {
-            Conflict: "update",
-          }).RunWrite(rSession)
+        _, err = preparedAddToQueuedPacks.Exec(filename, repoPath, repoId)
         if err != nil {
           return err
         }
@@ -859,34 +871,26 @@ func handleUpdateError(upErr error, repoId int, repoPath string) error {
 
 func readPackQueueLoop() {
     for {
+    var (
+      packFilename string
+      repoPath string
+      repoId int64
+    )
     // Fetch the oldest queue entry and mark it as being in progress.
-    res, err := r.DB("gitglob").Table("queued_packs").
-        OrderBy(r.OrderByOpts {Index: "queue_time"}).
-        Filter(r.Row.Field("in_progress").Default(false).Eq(false)).
-        Limit(1).
-        Update(r.Branch(r.Row.Field("in_progress").Default(false).Eq(false),
-          map[string]interface{} {
-            "in_progress": true,
-            "start_time": r.Now(),
-            },
-          r.Error("Queue entry is taken.")), r.UpdateOpts {
-            ReturnChanges: true,
-          }).RunWrite(rSession)
-    noWork := true
+    err := preparedGetNextQueuedPack.QueryRow().Scan(&packFilename, &repoPath,
+      &repoId)
+    noWork := false
     if err != nil {
-      fmt.Println("Error checking for work:", err.Error())
-    } else if len(res.Changes) > 0 {
-      noWork = false
+      noWork = true
+      if err != sql.ErrNoRows {
+        fmt.Println("Error checking for work:", err.Error())
+      }
     }
     
     if noWork {
       fmt.Println("No packs to load.\n")
       time.Sleep(time.Second)
     } else {
-      packDetails := res.Changes[0].NewValue.(map[string]interface{})
-      packFilename := packDetails["id"].(string)
-      repoPath := packDetails["repo_path"].(string)
-      repoId := int(packDetails["repo_id"].(float64))
       packFullPath := storagePath+"/gitpack/"+packFilename
       
 fmt.Printf("Will read: %+v\n", packFullPath)
@@ -915,8 +919,7 @@ fmt.Printf("Will read: %+v\n", packFullPath)
       }
       
       // Delete the pack from the list of packs that need to be read.
-      res, err = r.DB("gitglob").Table("queued_packs").Get(packDetails["id"]).
-        Delete().RunWrite(rSession)
+      _, err = preparedRemoveQueuedPack.Exec(packFilename)
       if err != nil {
         panic(err.Error())
       }
@@ -980,6 +983,22 @@ func main() {
   err = dbConn.Ping()
   if err != nil {
     fmt.Println("Error pinging DB:", err)
+    os.Exit(1)
+  }
+  
+  preparedAddToQueuedPacks, err = dbConn.Prepare(addToQueuedPacksQuery)
+  if err != nil {
+    fmt.Println("Error preparing query:", err)
+    os.Exit(1)
+  }
+  preparedGetNextQueuedPack, err = dbConn.Prepare(getNextQueuedPackQuery)
+  if err != nil {
+    fmt.Println("Error preparing query:", err)
+    os.Exit(1)
+  }
+  preparedRemoveQueuedPack, err = dbConn.Prepare(removeQueuedPackQuery)
+  if err != nil {
+    fmt.Println("Error preparing query:", err)
     os.Exit(1)
   }
   
