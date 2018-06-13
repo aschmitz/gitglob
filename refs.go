@@ -2,6 +2,7 @@ package main
 
 import (
   "bytes"
+  "database/sql"
   "encoding/binary"
   "errors"
   "fmt"
@@ -9,8 +10,6 @@ import (
   "os"
   "sync"
   "time"
-  
-  r "github.com/dancannon/gorethink"
 )
 
 const (
@@ -83,8 +82,7 @@ func CloseRefpackWriter() error {
 }
 
 func RefpackNameToDirectory(name string) (string, error) {
-  if len(name) != len("gitglob_YYYYMMDDHHIISS_123.refpack") &&
-     len(name) != len("gitglob_YYYYMMDDHHIISS_123456.refpack") { // TODO: Temporarily allow 6-digit trailers
+  if len(name) != len("gitglob_YYYYMMDDHHIISS_123.refpack") {
     return "", errors.New("Incorrect refpack name length.")
   }
   
@@ -229,39 +227,30 @@ func CalcRefDiffs(oldRefs, newRefs map[string][]byte,
   return diffs
 }
 
-func RecordRepoRefs(repoPath string, timestamp time.Time,
+func RecordRepoRefs(repoPath string, repoId int, timestamp time.Time,
   refs map[string][]byte) (refDiffs, map[string][]byte, error) {
-  var writeDiffs, diffs refDiffs
+  var (
+    diffs refDiffs
+    lastStamp time.Time
+    fetchCount int64
+    refNames []string
+    refHashes [][]byte
+  )
   oldRefs := make(map[string][]byte)
   
-  // Set these as the latest revisions in the database.
-  res, err := r.DB("gitglob").Table("refs_latest").Get(repoPath).Run(rSession)
-  if err != nil {
+  // Get the last set of revisions in the database.
+  err := preparedLatestRefsGet.QueryRow(repoId).Scan(&refNames, &refHashes,
+    &lastStamp, &fetchCount)
+  if err != sql.ErrNoRows {
     return diffs, oldRefs, err
   }
-  // res, err := r.DB("gitglob").Table("refs_latest").Get(repoPath).Replace(
-  //   r.Branch(r.Row, r.Row, map[string]interface{}{"id": repoPath}).
-  //   Without("refs").Merge(func (row r.Term) interface{} {
-  //     return map[string]interface{}{
-  //     "refs": refs,
-  //     "refStamp": timestamp.Unix(),
-  //     "refFetches": row.Field("refFetches").Default(0).Add(1),
-  //   }}), r.ReplaceOpts{ReturnChanges: true}).RunWrite(rSession)
-  // if err != nil {
-  //   return diffs, oldRefs, err
-  // }
   
   // Calculate the differences.
-  var lastStamp int64
-  var oldVal interface{}
-  err = res.One(&oldVal)
-  
-  switch {
-  case err == r.ErrEmptyResult:
+  if err == sql.ErrNoRows {
     // There was no previous record of this repository.
     diffs = refDiffs{
       Type: RefDiffTypeAbsolute,
-      From: lastStamp,
+      From: 0,
       NewRefs: refs,
       ChangedRefs: make(map[string][]byte),
       DeletedRefs: make([]string, 0),
@@ -275,58 +264,51 @@ func RecordRepoRefs(repoPath string, timestamp time.Time,
     for hash, _ := range newHashMap {
       diffs.NewHashes = append(diffs.NewHashes, hash)
     }
-    
-    writeDiffs = diffs
-  case err != nil:
-    return diffs, oldRefs, err
-  default:
-    oldValMap := oldVal.(map[string]interface{})
-    
-    // Try to determine the last set of refs we're using for this diff.
-    if oldValMap["refStamp"] == nil {
-      lastStamp = 0
-    } else {
-      lastStamp = int64(oldValMap["refStamp"].(float64))
-    }
-    
-    // We want to store an actual delta: calculate it.
-    calcOldRefs := make(map[string][]byte)
-    for refName, commithash :=
-      range oldValMap["refs"].(map[string]interface{}) {
-      oldRefs[refName] = commithash.([]byte)
-      calcOldRefs[refName] = commithash.([]byte)
-    }
-    diffs = CalcRefDiffs(calcOldRefs, refs,
-      int64(oldValMap["refStamp"].(float64)))
-    writeDiffs = diffs
-    
-    if int(oldValMap["refFetches"].(float64)) % maxRefDepth == 0 {
+  } else {
+    if fetchCount % maxRefDepth == 0 {
       // We want to write an absolute diff because we have gone long enough
       // without one. This prevents corruption from affecting all of a
       // repository's history, and means that "in-between" reflist lookups don't
       // have to apply deltas all the way back to be beginning of a repository.
-      writeDiffs = refDiffs{
+      diffs = refDiffs{
         Type: RefDiffTypeAbsolute,
-        From: lastStamp,
+        From: lastStamp.Unix(),
         NewRefs: refs,
         ChangedRefs: make(map[string][]byte),
         DeletedRefs: make([]string, 0),
       }
+    } else {
+      // We want to store an actual delta: calculate it.
+      calcOldRefs := make(map[string][]byte)
+      for refIndex, refName := range refNames {
+        oldRefs[refName] = refHashes[refIndex]
+        calcOldRefs[refName] = refHashes[refIndex]
+      }
+      diffs = CalcRefDiffs(calcOldRefs, refs, lastStamp.Unix())
     }
   }
   
   // Write the diffs to the database
-  refStamp := timestamp.Unix()
-  _, err = r.DB("gitglob").Table("refs_history").Insert(
-    map[string]interface{}{
-      "addr": repoPath,
-      "refStamp": refStamp,
-      "type": writeDiffs.Type,
-      "from": writeDiffs.From,
-      "new": writeDiffs.NewRefs,
-      "changed": writeDiffs.ChangedRefs,
-      "deleted": writeDiffs.DeletedRefs,
-    }).RunWrite(rSession)
+  refNewNames := make([]string, len(diffs.NewRefs))
+  refNewHashes := make([][]byte, len(diffs.NewRefs))
+  refChangedNames := make([]string, len(diffs.ChangedRefs))
+  refChangedHashes := make([][]byte, len(diffs.ChangedRefs))
+  
+  sliceIndex := 0
+  for refNewName, refNewHash := range diffs.NewRefs {
+    refNewNames[sliceIndex] = refNewName
+    refNewHashes[sliceIndex] = refNewHash
+    sliceIndex++
+  }
+  sliceIndex = 0
+  for refChangedName, refChangedHash := range diffs.ChangedRefs {
+    refChangedNames[sliceIndex] = refChangedName
+    refChangedHashes[sliceIndex] = refChangedHash
+    sliceIndex++
+  }
+  _, err = preparedHistoryRefsAdd.Exec(repoId, timestamp.Unix(), diffs.Type,
+    diffs.From, refNewNames, refNewHashes, refChangedNames, refChangedHashes,
+    diffs.DeletedRefs)
   if err != nil {
     return diffs, oldRefs, err
   }
@@ -348,17 +330,17 @@ func RecordRepoRefs(repoPath string, timestamp time.Time,
   }
   
   // Write diff type byte
-  err = binary.Write(currentRefpack.File, binary.BigEndian, byte(writeDiffs.Type))
+  err = binary.Write(currentRefpack.File, binary.BigEndian, byte(diffs.Type))
   if err != nil {
     return diffs, oldRefs, err
   }
   
   // Write timestamps
-  err = binary.Write(currentRefpack.File, binary.BigEndian, refStamp)
+  err = binary.Write(currentRefpack.File, binary.BigEndian, timestamp.Unix())
   if err != nil {
     return diffs, oldRefs, err
   }
-  err = binary.Write(currentRefpack.File, binary.BigEndian, int64(writeDiffs.From))
+  err = binary.Write(currentRefpack.File, binary.BigEndian, int64(diffs.From))
   if err != nil {
     return diffs, oldRefs, err
   }
@@ -366,23 +348,23 @@ func RecordRepoRefs(repoPath string, timestamp time.Time,
   // Write section lengths
   uvarintSlice := make([]byte, binary.MaxVarintLen64)
   newUvarintLen := binary.PutUvarint(uvarintSlice,
-    uint64(len(writeDiffs.NewRefs)))
+    uint64(len(diffs.NewRefs)))
   _, err = currentRefpack.File.Write(uvarintSlice[0:newUvarintLen]); if err != nil {
     return diffs, oldRefs, err
   }
   changedUvarintLen := binary.PutUvarint(uvarintSlice,
-    uint64(len(writeDiffs.ChangedRefs)))
+    uint64(len(diffs.ChangedRefs)))
   _, err = currentRefpack.File.Write(uvarintSlice[0:changedUvarintLen]); if err != nil {
     return diffs, oldRefs, err
   }
   deletedUvarintLen := binary.PutUvarint(uvarintSlice,
-    uint64(len(writeDiffs.DeletedRefs)))
+    uint64(len(diffs.DeletedRefs)))
   _, err = currentRefpack.File.Write(uvarintSlice[0:deletedUvarintLen]); if err != nil {
     return diffs, oldRefs, err
   }
   
   // Write new refs
-  for refName, commithash := range writeDiffs.NewRefs {
+  for refName, commithash := range diffs.NewRefs {
     _, err = currentRefpack.File.Write(commithash[:]); if err != nil {
       return diffs, oldRefs, err
     }
@@ -391,7 +373,7 @@ func RecordRepoRefs(repoPath string, timestamp time.Time,
     }
   }
   // Write changed refs
-  for refName, commithash := range writeDiffs.ChangedRefs {
+  for refName, commithash := range diffs.ChangedRefs {
     _, err = currentRefpack.File.Write(commithash[:]); if err != nil {
       return diffs, oldRefs, err
     }
@@ -400,7 +382,7 @@ func RecordRepoRefs(repoPath string, timestamp time.Time,
     }
   }
   // Write deleted refs
-  for _, refName := range writeDiffs.DeletedRefs {
+  for _, refName := range diffs.DeletedRefs {
     _, err = fmt.Fprintf(currentRefpack.File, "%s\n", refName); if err != nil {
       return diffs, oldRefs, err
     }
@@ -415,9 +397,9 @@ func RecordRepoRefs(repoPath string, timestamp time.Time,
   
   influxWritePoint("update_refs", map[string]string{}, map[string]interface{}{
     "total": len(refs),
-    "new": len(writeDiffs.NewRefs),
-    "changed": len(writeDiffs.ChangedRefs),
-    "deleted": len(writeDiffs.DeletedRefs),
+    "new": len(diffs.NewRefs),
+    "changed": len(diffs.ChangedRefs),
+    "deleted": len(diffs.DeletedRefs),
     "repo_path": repoPath,
   })
   

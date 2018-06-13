@@ -66,38 +66,67 @@ Hypothetical Index (doesn't exist, may not ever):
   20 bytes | Object ID
   N bytes  | Offset in packfile
 
-objects table:
-  id: binary
-  file: globpack name
-  loc: offset
 
-refs_latest:
-  id: .git URL (includes scheme)
-  refs: {refname: object ID}
+CREATE TABLE queued_packs
+(
+  filename text NOT NULL,
+  repo_path text NOT NULL,
+  repo_id integer NOT NULL,
+  queue_time timestamp with time zone NOT NULL DEFAULT now(),
+  in_progress smallint NOT NULL DEFAULT 0,
+  CONSTRAINT pk_filename PRIMARY KEY (filename)
+)
+WITH (
+  OIDS=FALSE
+);
+ALTER TABLE queued_packs
+  OWNER TO gitglob;
+CREATE INDEX idx_queue_time
+  ON queued_packs
+  USING btree
+  (queue_time);
 
-refs_history:
-  id: .git URL (includes scheme)
-  history: [
-    {
-      time: timestamp
-      refs: {
-        refname: null | object ID
-      }
-    }, ...
-  ]
 
-queued_updates:
-  id: string (repo path)
-  in_progress: bool
-  queue_time: time
-  start_time: time
-  oldest_to_grab: time
-  force_full: bool
+CREATE TABLE refs_latest
+(
+  repo_id bigint NOT NULL,
+  "timestamp" timestamp with time zone NOT NULL,
+  fetches integer NOT NULL DEFAULT 1,
+  ref_names text[],
+  ref_hashes bytea[],
+  CONSTRAINT refs_latest_pkey PRIMARY KEY (repo_id)
+)
+WITH (
+  OIDS=FALSE
+);
+ALTER TABLE refs_latest
+  OWNER TO gitglob;
 
-queued_packs:
-  id: autogen
-  in_progress: bool
-  queue_time: time
-  start_time: time
-  repo_path: string
-  filename: string
+
+CREATE TABLE refs_history
+(
+  id bigserial NOT NULL,
+  repo_id bigint NOT NULL,
+  "timestamp" timestamp with time zone NOT NULL,
+  type smallint NOT NULL,
+  "from" timestamp with time zone NOT NULL,
+  new_names text[],
+  new_hashes bytea[],
+  changed_names text[],
+  changed_hashes bytea[],
+  deleted_names text[],
+  CONSTRAINT refs_history_pkey PRIMARY KEY (id)
+)
+WITH (
+  OIDS=FALSE
+);
+ALTER TABLE refs_history
+  OWNER TO gitglob;
+CREATE INDEX refs_history_repo_id_idx
+  ON refs_history
+  USING btree
+  (repo_id);
+CREATE INDEX refs_history_repo_id_timestamp_idx
+  ON refs_history
+  USING btree
+  (repo_id, "timestamp");

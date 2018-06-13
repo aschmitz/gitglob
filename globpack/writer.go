@@ -17,7 +17,6 @@ import (
   "sync/atomic"
   
   "github.com/aschmitz/gitglob/debugging/flate"
-  r "github.com/dancannon/gorethink"
   "github.com/garyburd/redigo/redis"
 )
 
@@ -36,8 +35,6 @@ const (
   // use runtime.NumCPU() to run as many goroutines as there are CPU cores.
   compressGoroutineCount = 0
 )
-
-var rSession *r.Session
 
 type globpackWriteData struct {
   Hash [hashLen]byte  // The hash of the object to be inserted
@@ -242,17 +239,6 @@ func rotateGlobpackRegularly() {
 }
 
 func init() {
-  var err error
-  if rSession == nil {
-    rSession, err = r.Connect(r.ConnectOpts{
-      Address: "localhost:28015",
-      MaxIdle: 100,
-      MaxOpen: 100,
-    })
-    if err != nil {
-      panic(err.Error())
-    }
-  }
 }
 
 func globpackWriterStatsReporter() {

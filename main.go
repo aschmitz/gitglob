@@ -31,10 +31,8 @@ import (
   "github.com/aschmitz/gitglob/globpack"
   influxdb "github.com/influxdb/influxdb/client"
   _ "github.com/lib/pq"
-  r "github.com/dancannon/gorethink"
 )
 
-var rSession *r.Session
 var dbConn *sql.DB
 
 const (
@@ -88,23 +86,53 @@ const (
   
   addToQueuedPacksQuery = `INSERT INTO queued_packs
     (filename, repo_path, repo_id, queue_time) VALUES
-    ($1, $2, $3, NOW())`
+    ($1, $2, $3, NOW())
+    ON CONFLICT (filename) DO NOTHING`
   
   getNextQueuedPackQuery = `UPDATE queued_packs
     SET in_progress = 1
-    WHERE in_progress = 0
-    ORDER BY queue_time ASC
-    LIMIT 1
-    RETURNING pack_filename, repo_path, repo_id`
+    FROM (
+      SELECT filename FROM queued_packs
+        WHERE in_progress = 0
+        ORDER BY queue_time ASC LIMIT 1
+    ) AS found
+    WHERE queued_packs.filename = found.filename
+    RETURNING
+      queued_packs.filename, queued_packs.repo_path, queued_packs.repo_id`
   
   removeQueuedPackQuery = `DELETE FROM queued_packs
-    WHERE id = $1`
+    WHERE filename = $1`
+  
+  updateLatestRefsQuery = `INSERT INTO refs_latest
+    (repo_id, ref_names, ref_hashes, timestamp, fetches) VALUES
+    ($1, $2, $3, $4, 1)
+    ON CONFLICT (repo_id) DO UPDATE SET
+      repo_id = $1,
+      ref_names = $2,
+      ref_hashes = $3,
+      timestamp = $4,
+      fetches = refs_latest.fetches + 1;`
+  
+  getLatestRefsQuery = `SELECT
+    ref_names, ref_hashes, timestamp, fetches
+    FROM refs_latest
+    WHERE repo_id = $1`
+    
+  addHistoryRefsQuery = `INSERT INTO refs_history
+    (repo_id, timestamp, type, from, new_names, new_hashes,
+      changed_names, changed_hashes, deleted_names) VALUES
+    ($1, $2, $3, $4, $5, $6,
+      $7, $8, $9);`
 )
 
 var (
   preparedAddToQueuedPacks  *sql.Stmt
   preparedGetNextQueuedPack *sql.Stmt
   preparedRemoveQueuedPack  *sql.Stmt
+  
+  preparedLatestRefsUpdate *sql.Stmt
+  preparedLatestRefsGet    *sql.Stmt
+  preparedHistoryRefsAdd   *sql.Stmt
 )
 
 type GitglobConf struct {
@@ -684,6 +712,8 @@ func doUpdateRepoRefs(repoId int, repoPath string, forceFull bool) error {
   
   // Get the commits as the byte versions, not the hex ones.
   refs := make(map[string][]byte)
+  refNames := make([]string, len(hexRefs))
+  refHashes := make([][]byte, len(hexRefs))
   for refName, commithashHex := range hexRefs {
     // Filter for only the ones we actually care about.
     if refNameIgnoreRegex.Match([]byte(refName)) {
@@ -695,9 +725,11 @@ func doUpdateRepoRefs(repoId int, repoPath string, forceFull bool) error {
       return handleUpdateError(err, repoId, repoPath)
     }
     refs[refName] = commithash
+    refNames = append(refNames, refName)
+    refHashes = append(refHashes, commithash)
   }
   
-  newRefDiffs, _, err := RecordRepoRefs(repoPath, timestamp, refs)
+  newRefDiffs, _, err := RecordRepoRefs(repoPath, repoId, timestamp, refs)
   if err != nil {
     return err
   }
@@ -718,13 +750,8 @@ fmt.Printf("Wrote file %s.\n", filename)
       }
       
       // Save the list of refs as the latest one.
-      _, err = r.DB("gitglob").Table("refs_latest").Get(repoPath).Replace(
-        map[string]interface{} {
-          "id": repoPath,
-          "refs": refs,
-          "refStamp": timestamp.Unix(),
-          "refFetches": r.Row.Field("refFetches").Default(0).Add(1),
-        }).RunWrite(rSession)
+      _, err = preparedLatestRefsUpdate.Exec(repoId, refNames, refHashes,
+        timestamp.Unix())
       if err != nil {
         return err
       }
@@ -1002,13 +1029,20 @@ func main() {
     os.Exit(1)
   }
   
-  rSession, err = r.Connect(r.ConnectOpts{
-    Address: "localhost:28015",
-    MaxIdle: 100,
-    MaxOpen: 100,
-  })
+  preparedLatestRefsUpdate, err = dbConn.Prepare(updateLatestRefsQuery)
   if err != nil {
-    panic(err.Error)
+    fmt.Println("Error preparing query:", err)
+    os.Exit(1)
+  }
+  preparedLatestRefsGet, err = dbConn.Prepare(getLatestRefsQuery)
+  if err != nil {
+    fmt.Println("Error preparing query:", err)
+    os.Exit(1)
+  }
+  preparedHistoryRefsAdd, err = dbConn.Prepare(addHistoryRefsQuery)
+  if err != nil {
+    fmt.Println("Error preparing query:", err)
+    os.Exit(1)
   }
   
   cleanupChan := make(chan os.Signal, 1)
