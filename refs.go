@@ -10,6 +10,8 @@ import (
   "os"
   "sync"
   "time"
+  
+  "github.com/lib/pq"
 )
 
 const (
@@ -239,8 +241,8 @@ func RecordRepoRefs(repoPath string, repoId int, timestamp time.Time,
   oldRefs := make(map[string][]byte)
   
   // Get the last set of revisions in the database.
-  err := preparedLatestRefsGet.QueryRow(repoId).Scan(&refNames, &refHashes,
-    &lastStamp, &fetchCount)
+  err := preparedLatestRefsGet.QueryRow(repoId).Scan(pq.Array(&refNames),
+    pq.Array(&refHashes), &lastStamp, &fetchCount)
   if err != sql.ErrNoRows {
     return diffs, oldRefs, err
   }
@@ -307,8 +309,9 @@ func RecordRepoRefs(repoPath string, repoId int, timestamp time.Time,
     sliceIndex++
   }
   _, err = preparedHistoryRefsAdd.Exec(repoId, timestamp.Unix(), diffs.Type,
-    diffs.From, refNewNames, refNewHashes, refChangedNames, refChangedHashes,
-    diffs.DeletedRefs)
+    diffs.From, pq.Array(refNewNames), pq.Array(refNewHashes),
+    pq.Array(refChangedNames), pq.Array(refChangedHashes),
+    pq.Array(diffs.DeletedRefs))
   if err != nil {
     return diffs, oldRefs, err
   }

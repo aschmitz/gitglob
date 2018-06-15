@@ -30,7 +30,7 @@ import (
   "github.com/aschmitz/gitglob/mmap"
   "github.com/aschmitz/gitglob/globpack"
   influxdb "github.com/influxdb/influxdb/client"
-  _ "github.com/lib/pq"
+  "github.com/lib/pq"
 )
 
 var dbConn *sql.DB
@@ -119,7 +119,7 @@ const (
     WHERE repo_id = $1`
     
   addHistoryRefsQuery = `INSERT INTO refs_history
-    (repo_id, timestamp, type, from, new_names, new_hashes,
+    (repo_id, timestamp, type, from_ts, new_names, new_hashes,
       changed_names, changed_hashes, deleted_names) VALUES
     ($1, $2, $3, $4, $5, $6,
       $7, $8, $9);`
@@ -750,8 +750,8 @@ fmt.Printf("Wrote file %s.\n", filename)
       }
       
       // Save the list of refs as the latest one.
-      _, err = preparedLatestRefsUpdate.Exec(repoId, refNames, refHashes,
-        timestamp.Unix())
+      _, err = preparedLatestRefsUpdate.Exec(repoId, pq.Array(refNames),
+        pq.Array(refHashes), timestamp.Unix())
       if err != nil {
         return err
       }
