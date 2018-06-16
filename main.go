@@ -751,7 +751,7 @@ fmt.Printf("Wrote file %s.\n", filename)
       
       // Save the list of refs as the latest one.
       _, err = preparedLatestRefsUpdate.Exec(repoId, pq.Array(refNames),
-        pq.Array(refHashes), timestamp.Unix())
+        pq.Array(refHashes), timestamp)
       if err != nil {
         return err
       }

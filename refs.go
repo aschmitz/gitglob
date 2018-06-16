@@ -308,7 +308,7 @@ func RecordRepoRefs(repoPath string, repoId int, timestamp time.Time,
     refChangedHashes[sliceIndex] = refChangedHash
     sliceIndex++
   }
-  _, err = preparedHistoryRefsAdd.Exec(repoId, timestamp.Unix(), diffs.Type,
+  _, err = preparedHistoryRefsAdd.Exec(repoId, timestamp, diffs.Type,
     diffs.From, pq.Array(refNewNames), pq.Array(refNewHashes),
     pq.Array(refChangedNames), pq.Array(refChangedHashes),
     pq.Array(diffs.DeletedRefs))
