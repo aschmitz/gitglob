@@ -243,12 +243,12 @@ func RecordRepoRefs(repoPath string, repoId int, timestamp time.Time,
   // Get the last set of revisions in the database.
   err := preparedLatestRefsGet.QueryRow(repoId).Scan(pq.Array(&refNames),
     &refHashes, &lastStamp, &fetchCount)
-  if err != sql.ErrNoRows {
+  if (err != nil) && (err != sql.ErrNoRows) {
     return diffs, oldRefs, err
   }
   
   // Calculate the differences.
-  if (err != nil) && (err != sql.ErrNoRows) {
+  if err == sql.ErrNoRows {
     // There was no previous record of this repository.
     diffs = refDiffs{
       Type: RefDiffTypeAbsolute,
