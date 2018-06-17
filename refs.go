@@ -248,7 +248,7 @@ func RecordRepoRefs(repoPath string, repoId int, timestamp time.Time,
   }
   
   // Calculate the differences.
-  if err == sql.ErrNoRows {
+  if (err != nil) && (err != sql.ErrNoRows) {
     // There was no previous record of this repository.
     diffs = refDiffs{
       Type: RefDiffTypeAbsolute,
