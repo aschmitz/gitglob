@@ -175,10 +175,10 @@ fmt.Printf("closeRefpack() called for %s\n", pack.Filename)
 }
 
 func CalcRefDiffs(oldRefs, newRefs map[string][]byte,
-  oldTime int64) refDiffs {
+  oldTime time.Time) refDiffs {
   diffs := refDiffs {
     Type: RefDiffTypeDelta,
-    From: oldTime,
+    From: pq.NullTime{Time: oldTime, Valid: true},
     NewRefs: make(map[string][]byte),
     ChangedRefs: make(map[string][]byte),
     DeletedRefs: make([]string, 0),
@@ -236,13 +236,13 @@ func RecordRepoRefs(repoPath string, repoId int, timestamp time.Time,
     lastStamp time.Time
     fetchCount int64
     refNames []string
-    refHashes [][]byte
+    refHashes pq.ByteaArray
   )
   oldRefs := make(map[string][]byte)
   
   // Get the last set of revisions in the database.
   err := preparedLatestRefsGet.QueryRow(repoId).Scan(pq.Array(&refNames),
-    pq.Array(&refHashes), &lastStamp, &fetchCount)
+    &refHashes, &lastStamp, &fetchCount)
   if err != sql.ErrNoRows {
     return diffs, oldRefs, err
   }
@@ -252,7 +252,7 @@ func RecordRepoRefs(repoPath string, repoId int, timestamp time.Time,
     // There was no previous record of this repository.
     diffs = refDiffs{
       Type: RefDiffTypeAbsolute,
-      From: 0,
+      From: pq.NullTime{Valid: false},
       NewRefs: refs,
       ChangedRefs: make(map[string][]byte),
       DeletedRefs: make([]string, 0),
@@ -274,7 +274,7 @@ func RecordRepoRefs(repoPath string, repoId int, timestamp time.Time,
       // have to apply deltas all the way back to be beginning of a repository.
       diffs = refDiffs{
         Type: RefDiffTypeAbsolute,
-        From: lastStamp.Unix(),
+        From: pq.NullTime{Time: lastStamp, Valid: true},
         NewRefs: refs,
         ChangedRefs: make(map[string][]byte),
         DeletedRefs: make([]string, 0),
@@ -286,7 +286,7 @@ func RecordRepoRefs(repoPath string, repoId int, timestamp time.Time,
         oldRefs[refName] = refHashes[refIndex]
         calcOldRefs[refName] = refHashes[refIndex]
       }
-      diffs = CalcRefDiffs(calcOldRefs, refs, lastStamp.Unix())
+      diffs = CalcRefDiffs(calcOldRefs, refs, lastStamp)
     }
   }
   
@@ -309,9 +309,9 @@ func RecordRepoRefs(repoPath string, repoId int, timestamp time.Time,
     sliceIndex++
   }
   _, err = preparedHistoryRefsAdd.Exec(repoId, timestamp, diffs.Type,
-    diffs.From, pq.Array(refNewNames), pq.Array(refNewHashes),
-    pq.Array(refChangedNames), pq.Array(refChangedHashes),
-    pq.Array(diffs.DeletedRefs))
+    diffs.From, pq.StringArray(refNewNames), pq.ByteaArray(refNewHashes),
+    pq.StringArray(refChangedNames), pq.ByteaArray(refChangedHashes),
+    pq.StringArray(diffs.DeletedRefs))
   if err != nil {
     return diffs, oldRefs, err
   }
@@ -343,7 +343,7 @@ func RecordRepoRefs(repoPath string, repoId int, timestamp time.Time,
   if err != nil {
     return diffs, oldRefs, err
   }
-  err = binary.Write(currentRefpack.File, binary.BigEndian, int64(diffs.From))
+  err = binary.Write(currentRefpack.File, binary.BigEndian, int64(diffs.From.Time.Unix()))
   if err != nil {
     return diffs, oldRefs, err
   }

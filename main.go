@@ -141,7 +141,7 @@ type GitglobConf struct {
 
 type refDiffs struct {
   Type uint8
-  From int64
+  From pq.NullTime
   NewRefs map[string][]byte
   ChangedRefs map[string][]byte
   DeletedRefs []string
@@ -712,8 +712,8 @@ func doUpdateRepoRefs(repoId int, repoPath string, forceFull bool) error {
   
   // Get the commits as the byte versions, not the hex ones.
   refs := make(map[string][]byte)
-  refNames := make([]string, len(hexRefs))
-  refHashes := make([][]byte, len(hexRefs))
+  refNames := make([]string, 0, len(hexRefs))
+  refHashes := make([][]byte, 0, len(hexRefs))
   for refName, commithashHex := range hexRefs {
     // Filter for only the ones we actually care about.
     if refNameIgnoreRegex.Match([]byte(refName)) {
@@ -750,8 +750,8 @@ fmt.Printf("Wrote file %s.\n", filename)
       }
       
       // Save the list of refs as the latest one.
-      _, err = preparedLatestRefsUpdate.Exec(repoId, pq.Array(refNames),
-        pq.Array(refHashes), timestamp)
+      _, err = preparedLatestRefsUpdate.Exec(repoId, pq.StringArray(refNames),
+        pq.ByteaArray(refHashes), timestamp)
       if err != nil {
         return err
       }

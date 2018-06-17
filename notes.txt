@@ -109,7 +109,7 @@ CREATE TABLE refs_history
   repo_id bigint NOT NULL,
   "timestamp" timestamp with time zone NOT NULL,
   type smallint NOT NULL,
-  from_ts timestamp with time zone NOT NULL,
+  from_ts timestamp with time zone,
   new_names text[],
   new_hashes bytea[],
   changed_names text[],
