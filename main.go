@@ -55,10 +55,10 @@ const (
   // done. If not, we need to download this repository again. Set the queue
   // state accordingly.
   markRepoUpdatedQuery = `UPDATE repos
-    SET (queue_state, error_streak) = ((CASE
+    SET (queue_state, error_streak, force_full) = ((CASE
         WHEN queue_time < last_download_time THEN 0
         ELSE 1
-      END), 0)
+      END), 0, False)
     WHERE id = $1;`
   
   queueRepoUpdateQuery = `UPDATE repos
