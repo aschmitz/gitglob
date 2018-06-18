@@ -945,7 +945,7 @@ fmt.Printf("Will read: %+v\n", packFullPath)
       // Ignore errors where the file has already been removed: maybe we
       // processed this in two different processes. There's nothing to do if
       // that happens, everything should be fine.
-      if (err != nil) && (err.(*os.PathError).Err != "no such file or directory") {
+      if (err != nil) && (err.(*os.PathError).Err.Error() != "no such file or directory") {
         panic(err.Error())
       }
       
