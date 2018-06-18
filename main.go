@@ -941,7 +941,11 @@ fmt.Printf("Will read: %+v\n", packFullPath)
       forceGC()
       
       // Delete the pack from disk.
-      err = os.Remove(packFullPath); if err != nil {
+      err = os.Remove(packFullPath)
+      // Ignore errors where the file has already been removed: maybe we
+      // processed this in two different processes. There's nothing to do if
+      // that happens, everything should be fine.
+      if (err != nil) && (err.(*os.PathError).Err != "no such file or directory") {
         panic(err.Error())
       }
       
