@@ -81,7 +81,7 @@ const (
     RETURNING error_streak;`
   
   disableRepoQuery = `UPDATE repos
-    SET (enabled) = (FALSE)
+    SET (enabled) = ROW(FALSE)
     WHERE id = $1`
   
   addToQueuedPacksQuery = `INSERT INTO queued_packs
