@@ -867,13 +867,17 @@ func handleUpdateError(upErr error, repoId int, repoPath string) error {
     // Queue the appropriate retry.
     if shouldForceFull {
       rows, err := dbConn.Query(queueRepoUpdateForceFullQuery, repoId)
-      rows.Close()
+      if rows != nil {
+        rows.Close()
+      }
       if err != nil {
         panic(err.Error())
       }
     } else {
       rows, err := dbConn.Query(queueRepoUpdateQuery, repoId)
-      rows.Close()
+      if rows != nil {
+        rows.Close()
+      }
       if err != nil {
         panic(err.Error())
       }
@@ -887,7 +891,9 @@ func handleUpdateError(upErr error, repoId int, repoPath string) error {
     // We're not going to bother retrying this repository in the future at
     // this point, so mark it as disabled.
     rows, err := dbConn.Query(disableRepoQuery, repoId)
-    rows.Close()
+    if rows != nil {
+      rows.Close()
+    }
     if err != nil {
       panic(err.Error())
     }
